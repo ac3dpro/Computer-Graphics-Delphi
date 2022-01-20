@@ -1,0 +1,2795 @@
+unit GeometryUnit;
+
+interface
+
+uses
+  Windows,
+  Messages,
+  SysUtils,
+  Variants,
+  Classes,
+  Graphics,
+  Controls,
+  Forms,
+  Dialogs,
+  Menus,
+  Math,
+  StdCtrls,
+  ExtCtrls,
+  MathUnit;
+
+type
+    TMainDimensions = record             // Geometry Main Dimensions
+      LOA, Beam, Depth : TFloatType;     // Maximum dimensions LOA (Lenght Over All), Beam, Depth, on X, Y, Z directions respectively        // m
+      LPP              : TFloatType;     // Length Between Perpendiculars                                                                    // m
+      Cb               : TFloatType;     // Block Coefficient                                                                                // ---
+      OUCS             : T3DPoint;       // User Coordinate System Origin                                                                    // m
+    end;
+
+    TSCP = record                        // Complete Surface Control Polylines (SCP)
+      Sym        : boolean;              // Symetric or not                                                                                  // ---
+      SymPlan    : TPlan;                // Symetry Plan                                                                                     // m
+      Draft      : TFloatType;           // Height of Design Waterline                                                                       // m
+      Dimensions : TMainDimensions;      // Geometry Main Dimensions                                                                         // m
+      N          : integer;              // Number of 3D polylines                                                                           // ---
+      P          : TPolySet;             // Array of T3DPline                                                                                // ---
+      Link       : TVetorIN;             // Identity of Polyline connected                                                                   // ---
+      L1, LN     : TVetorIN;             // Identity of Start and Ending Point of connection (destination)                                   // ---
+      B1, BN     : TVetorIN;             // Identity of Start and Ending Point of connection (birth)                                         // ---
+    end;
+
+    TTBC = record                        // Complete TBC data
+      NS,NW,NC : integer;                // Number of Stations, Waterlines and Chines                                                        // ---
+      ST,WL,CH : TPolySet;               // Polylines representing Stations, Waterlines and Chines                                           // m
+    end;
+
+    TBonjeanVlasov = record              // Bonjean Vlasov Data
+      NS  : integer;                     // Number of Sections                                                                               // ---
+      NP  : TVetorIN;                    // Number of Points per Section                                                                     // ---
+      Z   : TMatrizNxN;                  // Heights of Points per Section                                                                    // m
+      SA  : TMatrizNxN;                  // Half-Area of Section up to the Z Height                                                          // m2
+      MLB : TMatrizNxN;                  // Momentum of Half-Area of Section up to the Z Height relative to Base Line (LB)                   // m.m2
+      MLC : TMatrizNxN;                  // Momentum of Half-Area of Section up to the Z Height relative to Center Line (LC)                 // m.m2
+    end;
+
+    THidrostatic = record                // Hidrostatic Tables Data
+      N    : integer;                    // Number of Horizontal Sections (Drafts)
+      Z    : TVetorN;                    // Z Height of a Section (Draft)                                                                    // m
+      Vol  : TVetorN;                    // Volume up to the Draft                                                                           // m3
+      Disp : TVetorN;                    // Displacement up to the Draft                                                                     // t
+      XB   : TVetorN;                    // Longitudinal Position of the Centroid of Volume up to the Draft, relative to SMN +backwards      // m
+      ZB   : TVetorN;                    // Height of the Centroid of Volume up to the Draft, relative to Base Line (LB)                     // m
+      XF   : TVetorN;                    // Longitudinal Position from the Centroid of the floating waterline of the Draft                   // m
+      TPC  : TVetorN;                    // Tonnages per Centimeter of Immersion for the given Draft                                         // t
+      MTC  : TVetorN;                    // Momentum to trim One Centimeter for the given Draft                                              // t.m
+      CDCT : TVetorN;                    // Correction of Displacement per Centimeter of Trim for the given Draft                            // ton
+      SWet : TVetorN;                    // Wet Surface up to the given Draft                                                                // m
+      CB   : TVetorN;                    // Block Coefficient up to the given Draft                                                          // ---
+      CP   : TVetorN;                    // Prismatic Coefficient up to the given Draft (relative to midsection prism)                       // ---
+      CSM  : TVetorN;                    // Midsection Coefficient up to the given Draft                                                     // ---
+      CPV  : TVetorN;                    // Vertical Prismatic Coefficient up to the given Draft (relative to waterline prism)               // ---
+      CWL  : TVetorN;                    // Waterline Coefficient of the given Draft                                                         // ---
+      KML  : TVetorN;                    // Metacentric Longitudinal Height up to the given Draft                                            // m
+      KMT  : TVetorN;                    // Metacentric Tranversal Height up to the given Draft                                              // m
+      MAG  : TVetorN;                    // Momentum to Heel One Degree                                                                      // t.m
+    end;
+
+    TFirsov = record
+      N    : integer;                    // Number of Drafts for Firsov Volume Mapping                                                       // ---
+      T    : TVetorN;                    // Height of each Draft relative to Base Line (LB)                                                  // m
+      Vol  : TMatrizNxN;                 // Volume for a combination of back and aft Drafts given through the Matrice Index (i,j)            // m3
+      XB   : TMatrizNxN;                 // Long. Pos. of the Centroid of Vol for the same combination of Drafts, Matrice Index (i,j)        // m
+      ZB   : TMatrizNxN;                 // Vert. Pos. of the Centroid of Vol for the same combination of Drafts, Matrice Index (i,j)        // m
+    end;
+
+    TMeshParts = record
+      RightDown,RightUp,LeftDown,LeftUp : TMesh;
+    end;
+
+    TColorSettings = record    // Color Settings
+      BackGround,WireFrame,SurfaceEdge,Surface,SubSurface : TColor;
+      SelectionZone,Polyline2D,MarkerBorder,MarkerBrush : TColor;
+      BackGround2D : TColor;
+    end;
+
+    TAppViewSettings = record     // Appearance View Settings
+      Edges,HideAxis,SubSurface : boolean;
+    end;
+
+    THullViewSettings = record   // Hull View Settings
+      Symmetry, Stations, Waterlines,
+      Chines, WireFrame, Polygons, Render : boolean;
+    end;
+    
+    TAlphaNumericSettings = record     // Alpha-Numeric representation Settings
+      SaveDecPlaces : integer;
+    end;
+
+type TSCPClass = class
+     public
+       class procedure AddPolyLink(N, NewL, NewL1, NewLN, First, Last : integer;
+                                   var SCPLink, SCPL1, SCPLN : TVetorIN);
+       class procedure AddPoly(N : integer; P : T3DPline; NewL, NewL1, NewLN : integer; var SCP : TSCP);
+       class procedure AddPointLink(N, NPoint : integer; First, Last : integer; var SCP : TSCP);
+       class procedure AddPolyPoint(N, NPoint : integer; X, Y, Z : TFloatType; var SCP : TSCP);
+       class procedure ApplyClosureSCP(var SCP : TSCP);
+       class procedure ChangeMirrorPlan(Plan : TPlan; var SCP : TSCP);
+       class procedure ChangeReference(Origin : T3DPoint; var SCP : TSCP);
+       class function CoincidentPoly(A, B : integer; var SCP : TSCP) : boolean;
+       class procedure CoincidentPoints(SCP : TSCP; X, Y, Z : TFloatType; var Npts : integer; var Lin, Pnt : TVetorIN);
+       class procedure DeletePolyLink(N, NewL, First, Last : integer;
+                                      var SCPLink : TVetorIN); overload;
+       class procedure DeletePolyLink(N, NewL, NewL1, NewLN, First, Last : integer;
+                                      var SCPLink, SCPL1, SCPLN : TVetorIN); overload;
+       class procedure DeletePoly(N, NewL : integer; var SCP : TSCP); overload;
+       class procedure DeletePoly(N, NewL, NewL1, NewLN : integer; var SCP : TSCP); overload;
+       class procedure DeletePolyAll(N, NewL, NewL1, NewLN : integer; var SCP : TSCP);
+       class procedure DeletePointLink(N, NPoint : integer; First, Last : integer; var SCP : TSCP);
+       class procedure DeletePolyPoint(N, NPoint : integer; var SCP : TSCP);
+       class procedure DeleteSetofPoints(CLine, CPoint : TVetorIN; var SCP : TSCP);
+       class procedure DeleteNullLines(var SCP : TSCP);
+       class procedure InitializeSCP(var SCP : TSCP);
+       class procedure MirrorCopy(var SCP : TSCP);
+       class function PlanarSplineSurface(SCP : TSCP) : TMesh;
+       class function PlanarSurface(SCP : TSCP) : TMesh;
+       class procedure ReadSCP(SCPFileName : string; var SCP : TSCP);
+       class procedure ResetSCP(var SCP : TSCP);
+       class function SCPPolyToStr(A : integer; SCP : TSCP; SpaceChar : string; Format : TFloatFormat;
+                                   Precision, Digits : Integer) : string;
+       class procedure TBCToSCP(NS,NW,NC : integer; NPS,NPW,NPC : TVetorIN;
+                                XS,YS,ZS,XW,YW,ZW,XC,YC,ZC : TMatrizNxN; RDraft : TFloatType;
+                                var SCP : TSCP);
+       class function UniformSCP(SCP : TSCP) : TSCP;
+       class procedure WriteSCP(var TXT : text; SCPFileName : string; SCP : TSCP;
+                                MinWidth, DecPlaces : integer);
+     end;
+
+type TECPClass = class
+     public
+       class procedure Desenha_Polyline(Poly : TPline; Image : TImage; Color : TColor;
+                                        SizeRatio : TFloatType; XOrigin, YOrigin : integer);
+       class procedure Draw_Grid(Image : TImage; Mode_Aligned : boolean; ShowText : boolean; Hmargem, Vmargem : TFloatType;
+                                 HMF, VMF : TVetorN; nHMF, nVMF : integer;
+                                 Ratio, xMin, Lt, Bt, Ht, T : TFloatType;
+                                 NX,NY,NZ : integer; Xgrid, Ygrid, Zgrid : TVetorN);
+       class procedure Escala_Contornos(Image : TImage; Mode_Aligned : boolean; Lt, Bt, Ht : TFloatType; margemA3, nHA3, nVA3 : TFloatType;
+                                        var Hmargem, Vmargem, Ratio : TFloatType);
+       class procedure Fit_Section_Grid(Lt, Ht, LAP, Lgrid, Bgrid, Hgrid : TFloatType; var NX,NY,NZ : integer;
+                                        var Xgrid, Ygrid, Zgrid : TVetorN);
+       class procedure Generate_Linesplan_Rounded(Pol_F, Pol_S, Pol_L : TPline; Pol_EP, Pol_BF : T3DPline;
+                                                  LBP : TFloatType; NX, NY,NZ : integer; Xgrid, Ygrid, Zgrid : TVetorN;
+                                                  var St, Wl, Bt : TWire);
+       class procedure ImageText(Image : TImage; X, Y : integer; XCentered, YCentered : boolean;
+                                 TextFont, Color : integer; TextStyle : TFontStyles; Text : WideString);
+     end;
+
+const
+   DXFPrecision = 18;  { Precision for DXF Files coordinates }
+   DXFDigits = 4;      { Digits for DXF Files coordinates }
+   CloseRateDefault : TFloatType = 100;  { CloseRateDefault: Proximidade Padrão da Câmera ao Alvo }
+
+var
+  StrDXFDebug : string;                  { StrDXFDebug : string para escrever informações em arquivo dxf debugger }
+
+implementation
+
+{---------------------------------------------------------------------------------------------------}
+{                                           TSCPClass                                               }
+{                                                                                                   }
+{ TSCPClass class gather all algorithms related to building SCP structured datas                    }
+{---------------------------------------------------------------------------------------------------}
+
+class procedure TSCPClass.AddPolyLink(N, NewL, NewL1, NewLN, First, Last : integer;
+                                      var SCPLink, SCPL1, SCPLN : TVetorIN);
+var                    { Acrescenta um novo valor a frente da posição N da lista SCPLink, ligando-se a NewL }
+  i : integer;         { do ponto NewL1 ao ponto NewLN }
+begin                  { A operação é feita de First a Last de SCPLink }
+  { Ajusta elementos posteriores a posição N }
+  for i := First to Last do
+  begin
+    If SCPLink[i] > N then
+    begin
+      SCPLink[i] := SCPLink[i] + 1;
+      SCPLink[i] := Confine(SCPLink[i],First,Last+1);
+    end;
+  end;
+  //ShowMessage('Oi '+IntToStr(N)+' '+IntToStr(NewL)+' '+IntToStr(High(SCPLink)));
+  AddValue(N,NewL,SCPLink); //ShowMessage(VectorToStr(SCPLink,char(9)));
+  AddValue(N,NewL1,SCPL1);  //ShowMessage('Oi 2 ' + IntToStr(High(SCPL1)));
+  AddValue(N,NewLN,SCPLN);  //ShowMessage('Oi 3 ' + IntToStr(High(SCPLN)));
+end;  { TSCPClass.AddPolyLink }
+
+class procedure TSCPClass.AddPoly(N : integer; P : T3DPline; NewL, NewL1, NewLN : integer; var SCP : TSCP);
+var                { Acrescenta a polyline P de Link NewL à SCP a frente da posição N }
+  i, j : integer;
+  V : TVetorIN;
+  Wire, Wire1 : TWire;
+  {strmsg : string;  txt : text;}
+begin
+  {strmsg := '';}
+  { Ajusta elementos posteriores a posição N }
+  If SCP.Sym = False then                   { Assimétrico }
+  begin        
+    AddPolyLink(N,NewL,NewL1,NewLN,1,SCP.N,SCP.Link,SCP.L1,SCP.LN);
+    Wire := TSetofPoly.AddPoly(PolySetToWire(SCP.N,SCP.P),P,N);
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire.P := nil;
+  end
+  Else If SCP.Sym = True then               { Simétrico }
+  begin
+    AddPolyLink(N,NewL,NewL1,NewLN,1,SCP.N,SCP.Link,SCP.L1,SCP.LN);
+    i := InvSymInteger(N,SCP.N)+1;        // SCP.N div 2 + N + 1
+    If NewL = 0 then
+      j := 0
+    Else begin
+      j := InvSymInteger(NewL,SCP.N)+1;   // SCP.N div 2 + NewL + 1
+    end;
+    AddPolyLink(i,j,NewL1,NewLN,i-(N-1),SCP.N+1,SCP.Link,SCP.L1,SCP.LN);
+    Wire := TSetofPoly.AddPoly(PolySetToWire(SCP.N,SCP.P),P,N);
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    P := TPoly.Mirror(P,SCP.SymPlan);
+    Wire := TSetofPoly.AddPoly(PolySetToWire(SCP.N,SCP.P),P,i);
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire.P := nil;
+  end;
+  {for i := 1 to SCP.N do
+  begin
+    strmsg := strmsg + SCPPolyToStr(i,SCP,char(9),fffixed,18,18);
+  end;
+  StringToText(txt,'polígonos 2.txt',strmsg);}
+end;  { TSCPClass.AddPoly }
+
+class procedure TSCPClass.AddPointLink(N, NPoint : integer; First, Last : integer; var SCP : TSCP);
+var
+  i, j, k, L, SCPL1, SCPLN : integer;
+begin
+  { Ajusta elementos posteriores a posição N }
+  for i := First to Last do
+  begin
+    If SCP.Link[i] = N then
+    begin
+      SCPL1 := Min(SCP.L1[i],SCP.LN[i]);  SCPLN := Max(SCP.L1[i],SCP.LN[i]);
+      j := SCPL1;  k := SCPLN;
+      If (j <= NPoint) and (NPoint < k) then
+        Inc(k)
+      Else If NPoint < j then
+      begin
+        Inc(j);  Inc(k);
+      end;
+
+      If SCPL1<>SCPLN then
+      begin
+        If SCPL1 = SCP.L1[i] then
+        begin
+          SCP.L1[i] := Confine(j,1,SCP.P[N].Npoly+1);
+          SCP.LN[i] := Confine(k,1,SCP.P[N].Npoly+1);
+        end
+        Else begin
+          SCP.L1[i] := Confine(k,1,SCP.P[N].Npoly+1);
+          SCP.LN[i] := Confine(j,1,SCP.P[N].Npoly+1);
+        end;
+      end
+      Else If SCPL1=SCPLN then
+      begin
+        SCP.L1[i] := Confine(j,1,SCP.P[N].Npoly+1);
+        SCP.LN[i] := Confine(k,1,SCP.P[N].Npoly+1);
+      end;
+    end;
+  end;
+end;  { TSCPClass.AddPointLink }
+
+class procedure TSCPClass.AddPolyPoint(N, NPoint : integer; X, Y, Z : TFloatType; var SCP : TSCP);
+var    { Acrescenta ponto a frente do ponto NPoint da polyline N de SCP }
+  i,j : integer; strmsg : string;
+begin
+  If SCP.P[N].Npoly >= 1 then
+  begin
+    If SCP.Sym = False then                   { Assimétrico }
+    begin
+      AddPointLink(N,NPoint,1,SCP.N,SCP);       { atualiza links }
+      TPoly.AddPoint(NPoint,X,Y,Z,SCP.P[N]);    { acrescenta novo ponto }
+    end
+    Else If SCP.Sym = True then               { Simétrico }
+    begin
+      AddPointLink(N,NPoint,1,SCP.N div 2,SCP);
+      TPoly.AddPoint(NPoint,X,Y,Z,SCP.P[N]);
+      i := InvSymInteger(N,SCP.N);         // SCP.N div 2 + N
+      AddPointLink(i,NPoint,SCP.N div 2 + 1,SCP.N,SCP);
+      MirrorToPlan(SCP.SymPlan,X,Y,Z,X,Y,Z);
+      TPoly.AddPoint(NPoint,X,Y,Z,SCP.P[i]);
+    end;
+  end;
+end;  { TSCPClass.AddPolyPoint }
+
+class procedure TSCPClass.ApplyClosureSCP(var SCP : TSCP);
+var
+  i, j : integer;
+begin
+  with SCP do
+  begin
+    for i := 1 to N do                { Polyline Fechada é mencionada fechada pelo usuário }
+    begin                             { mas pontos fornecidos indicam Gap (abertura, fenda) }
+      j := P[i].Npoly;
+      If (TPoly.Gap_Coord(P[i].X[1],P[i].Y[1],P[i].Z[1],
+      P[i].X[j],P[i].Y[j],P[i].Z[j]) = True) and (P[i].Closed = True) then
+      begin
+        P[i].Npoly := P[i].Npoly + 1;    { Fechamos a Polyline }
+        j := P[i].Npoly;
+        SetLength(P[i].X,j+1);   SetLength(P[i].Y,j+1);
+        SetLength(P[i].Z,j+1);
+        P[i].X[j] := P[i].X[1];  P[i].Y[j] := P[i].Y[1];
+        P[i].Z[j] := P[i].Z[1];
+      end;
+    end;
+  end;
+end;  { TSCPClass.ApplyClosureSCP }
+
+class procedure TSCPClass.DeletePolyLink(N, NewL, First, Last : integer;
+                                         var SCPLink : TVetorIN);
+var                    { Deleta posição N de SCPLink. Os elementos que }
+  i : integer;         { se ligavam a N, passam a se ligar a NewL. }
+begin                  { A operação é feita de First a Last de SCPLink }
+  { Ajusta elementos posteriores a posição N }
+  for i := First to Last do
+  begin
+    If SCPLink[i] > N then
+      SCPLink[i] := SCPLink[i] - 1
+    Else If SCPLink[i] = N then
+    begin
+      If NewL > N then
+        SCPLink[i] := NewL-1
+      Else SCPLink[i] := NewL;
+    end;
+  end;
+  RemoveValue(N,SCPLink);
+end;  { TSCPClass.DeletePolyLink }
+
+class procedure TSCPClass.DeletePolyLink(N, NewL, NewL1, NewLN, First, Last : integer;
+                                         var SCPLink, SCPL1, SCPLN : TVetorIN);
+var                    { Deleta posição N de SCPLink. Os elementos que }
+  i : integer;         { se ligavam a N, passam a se ligar a NewL. }
+begin                  { A operação é feita de First a Last de SCPLink }
+  { Ajusta elementos posteriores a posição N }
+  for i := First to Last do
+  begin
+    If SCPLink[i] > N then
+    begin
+      SCPLink[i] := SCPLink[i] - 1;
+    end
+    Else If SCPLink[i] = N then
+    begin
+      If NewL > N then
+      begin
+        SCPLink[i] := NewL-1;
+        SCPL1[i] := NewL1;  SCPLN[i] := NewLN;
+      end
+      Else begin
+        SCPLink[i] := NewL;
+        SCPL1[i] := NewL1;  SCPLN[i] := NewLN;
+      end;
+    end;
+  end;
+  RemoveValue(N,SCPLink);
+  RemoveValue(N,SCPL1);
+  RemoveValue(N,SCPLN);
+end;  { TSCPClass.DeletePolyLink }
+
+class procedure TSCPClass.DeletePoly(N, NewL : integer; var SCP : TSCP);
+var                    { Deleta polyline N de SCP. As polylines que }
+                       { se ligavam a N, passam a se ligar a NewL }
+  i, j : integer; Wire : TWire; strmsg : string;
+begin
+  NewL := Confine(NewL,0,SCP.N);
+  If SCP.Sym = False then
+  begin
+    DeletePolyLink(N,NewL,1,SCP.N,SCP.Link);
+    {for i := 1 to SCP.N do
+    begin
+      If SCP.Link[i] > N then
+        SCP.Link[i] := SCP.Link[i] - 1
+      Else If SCP.Link[i] = N then
+      begin
+        If NewL > N then
+          SCP.Link[i] := NewL-1
+        Else SCP.Link[i] := NewL;
+      end;
+    end;
+    RemoveValue(N,SCP.Link);}
+    //ShowMessage(VectorToStr(SCP.Link,') '));
+    Wire := TSetofPoly.Delete(N,PolySetToWire(SCP.N,SCP.P));
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire.P := nil;
+  end
+  Else If SCP.Sym = True then
+  begin
+    DeletePolyLink(N,NewL,1,SCP.N,SCP.Link);
+    i := InvSymInteger(N,SCP.N)-1;       // -1 porque foi deletado o índice N
+    If NewL = 0 then j := 0
+    Else begin
+      j := InvSymInteger(NewL,SCP.N)-1;  // -1 porque foi deletado o índice N
+    end;
+
+    DeletePolyLink(i,j,i-(N-1),SCP.N,SCP.Link);
+    Wire := TSetofPoly.Delete(N,PolySetToWire(SCP.N,SCP.P));
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire := TSetofPoly.Delete(i,PolySetToWire(SCP.N,SCP.P));
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire.P := nil;
+  end;
+end;  { TSCPClass.DeletePoly }
+
+class procedure TSCPClass.DeletePoly(N, NewL, NewL1, NewLN : integer; var SCP : TSCP);
+var    { Deleta polyline N de SCP. As polylines que se ligavam a N, passam }
+       { a se ligar a NewL do ponto NewL1 ao ponto NewLN. Não confere pontos coincidentes }
+  i, j : integer; Wire : TWire; strmsg : string;
+begin
+  NewL := Confine(NewL,0,SCP.N);
+  If SCP.Sym = False then                   { Assimétrico }
+  begin
+    DeletePolyLink(N,NewL,NewL1,NewLN,1,SCP.N,SCP.Link,SCP.L1,SCP.LN);
+    Wire := TSetofPoly.Delete(N,PolySetToWire(SCP.N,SCP.P));
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire.P := nil;
+  end
+  Else If SCP.Sym = True then               { Simétrico }
+  begin
+    DeletePolyLink(N,NewL,NewL1,NewLN,1,SCP.N,SCP.Link,SCP.L1,SCP.LN);
+    i := InvSymInteger(N,SCP.N)-1;       // SCP.N div 2 + N - 1
+    If NewL = 0 then
+      j := 0
+    Else begin
+      j := InvSymInteger(NewL,SCP.N)-1;  // SCP.N div 2 + NewL - 1
+    end;
+
+    DeletePolyLink(i,j,NewL1,NewLN,i-(N-1),SCP.N-1,SCP.Link,SCP.L1,SCP.LN);
+    Wire := TSetofPoly.Delete(N,PolySetToWire(SCP.N,SCP.P));
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire := TSetofPoly.Delete(i,PolySetToWire(SCP.N,SCP.P));
+    SCP.N := Wire.N;  SCP.P := Wire.P;
+    Wire.P := nil;
+  end;
+end;  { TSCPClass.DeletePoly }
+
+class procedure TSCPClass.DeletePolyAll(N, NewL, NewL1, NewLN : integer; var SCP : TSCP);
+var    { Deleta polyline N de SCP. As polylines que se ligavam a N, passam }
+       { a se ligar a NewL do ponto NewL1 ao ponto NewLN. Confere pontos coincidentes }
+  i, j : integer; Wire : TWire; strmsg : string;
+begin
+
+end; { TSCPClass.DeletePolyAll }
+
+class procedure TSCPClass.DeletePointLink(N, NPoint : integer; First, Last : integer; var SCP : TSCP);
+var                                      { Ajusta SCP.L1 e SCP.LN considerando a exclusão do ponto }
+  i, j, k, L, SCPL1, SCPLN : integer;    { Npoint da polyline N }
+begin
+  { Ajusta elementos posteriores a posição N }
+  for i := First to Last do
+  begin
+    If SCP.Link[i] = N then
+    begin
+      SCPL1 := Min(SCP.L1[i],SCP.LN[i]);  SCPLN := Max(SCP.L1[i],SCP.LN[i]);
+      j := SCPL1;  k := SCPLN;
+      If (j < NPoint) and (NPoint <= k) then
+        Dec(k)
+      Else If NPoint <= j then
+      begin
+        Dec(j);  Dec(k);
+      end;
+
+      If SCPL1<>SCPLN then
+      begin
+        If SCPL1 = SCP.L1[i] then
+        begin
+          SCP.L1[i] := Confine(j,1,SCP.P[N].Npoly-1);
+          SCP.LN[i] := Confine(k,1,SCP.P[N].Npoly-1);
+        end
+        Else begin
+          SCP.L1[i] := Confine(k,1,SCP.P[N].Npoly-1);
+          SCP.LN[i] := Confine(j,1,SCP.P[N].Npoly-1);
+        end;
+      end
+      Else If SCPL1=SCPLN then
+      begin
+        SCP.L1[i] := Confine(j,1,SCP.P[N].Npoly-1);
+        SCP.LN[i] := Confine(k,1,SCP.P[N].Npoly-1);
+      end;
+    end;
+  end;
+end;  { TSCPClass.DeletePointLink }
+
+class procedure TSCPClass.DeletePolyPoint(N, NPoint : integer; var SCP : TSCP);
+var    { Deleta ponto NPoint da polyline N de SCP }
+  i, j, k : integer;
+  CLin,CPnt : TVetorIN;
+  Xdel, Ydel, Zdel : TFloatType;
+  strmsg : string;
+begin
+  If SCP.P[N].Npoly >= 1 then
+  begin
+    If SCP.Sym = True then               { Simétrico }
+    begin
+      { Vetores CLin,CPnt - pontos coincidentes }
+      i := SCP.N;
+      SCP.N := i div 2;
+
+      {DeletePointLink(N,NPoint,1,SCP.N div 2,SCP);
+      TPoly.RemovePoint(NPoint,SCP.P[N]);
+
+      i := InvSymInteger(N,SCP.N);         // SCP.N div 2 + N
+      DeletePointLink(i,NPoint,SCP.N div 2 + 1,SCP.N,SCP);
+      TPoly.RemovePoint(NPoint,SCP.P[i]);}
+    end;
+
+    Xdel := SCP.P[N].X[NPoint];  Ydel := SCP.P[N].Y[NPoint];  Zdel := SCP.P[N].Z[NPoint];
+
+    If SCP.P[N].Merged[NPoint] = False then
+    begin
+      { Remove o ponto selecionado, sem alterar os demais coincidentes }
+      DeletePointLink(N,NPoint,1,SCP.N,SCP);
+      TPoly.RemovePoint(NPoint,SCP.P[N]);
+    end
+    Else begin
+      { Lista nos vetores CLin,CPnt os índices dos pontos coincidentes com o ponto NPoint a ser deletado }
+      CoincidentPoints(SCP,Xdel,Ydel,Zdel,k,CLin,CPnt);
+
+      If k > 0 then
+      begin
+        { Ajusta Links para a remoção dos pontos coincidentes com NPoint }
+        for j := k downto 1 do
+          If SCP.P[CLin[j]].Merged[CPnt[j]] = True then
+            DeletePointLink(CLin[j],CPnt[j],1,SCP.N,SCP);
+
+        { Deleta os pontos j coincidentes com NPoint de k a 1 das polilinhas SCP.P[j] }
+        for j := k downto 1 do
+          If SCP.P[CLin[j]].Merged[CPnt[j]] = True then
+            TPoly.RemovePoint(CPnt[j],SCP.P[CLin[j]]);
+      end
+      Else If k = 0 then
+      begin
+        { Remove o ponto selecionado, sem alterar os demais coincidentes }
+        DeletePointLink(N,NPoint,1,SCP.N,SCP);
+        TPoly.RemovePoint(NPoint,SCP.P[N]);
+      end;
+    end;
+
+    { Deleta poligonais que ficaram com quantidade nula de pontos }
+    DeleteNullLines(SCP);
+
+    If SCP.Sym = True then               { Simétrico }
+    begin
+      MirrorCopy(SCP);
+    end;
+  end;
+end;  { TSCPClass.DeletePolyPoint }
+
+class procedure TSCPClass.DeleteSetofPoints(CLine, CPoint : TVetorIN; var SCP : TSCP);
+var
+  i, j, k : integer;
+begin
+  k := High(CLine);
+  { Ajusta Links para a remoção dos pontos coincidentes com NPoint }
+  If k > 0 then
+  begin
+    for j := k downto 1 do
+      If SCP.P[CLine[j]].Merged[CPoint[j]] = True then
+        DeletePointLink(CLine[j],CPoint[j],1,SCP.N,SCP);
+
+    { Deleta os pontos j coincidentes com NPoint de 1 a k das polilinhas SCP.P[j] }
+    for j := k downto 1 do
+      If SCP.P[CLine[j]].Merged[CPoint[j]] = True then
+        TPoly.RemovePoint(CLine[k],SCP.P[CPoint[k]]);
+  end;
+end;  { TSCPClass.DeleteSetofPoints }
+
+class procedure TSCPClass.DeleteNullLines(var SCP : TSCP);
+var
+  i : integer; Wire : TWire;
+begin
+  { Deleta poligonais que estão com quantidade nula de pontos }
+  i := 0;
+  repeat
+  begin
+    i := i + 1;
+    if SCP.P[i].Npoly = 0 then
+    begin
+      DeletePolyLink(i,0,0,0,1,SCP.N,SCP.Link,SCP.L1,SCP.LN);
+      Wire := TSetofPoly.Delete(i,PolySetToWire(SCP.N,SCP.P));
+      SCP.N := Wire.N;  SCP.P := Wire.P;
+      i := i - 1;
+    end;
+  end;
+  until(i >= SCP.N);
+  Wire.P := nil;
+end;  { TSCPClass.DeleteNullLines }
+
+class procedure TSCPClass.InitializeSCP(var SCP : TSCP);
+var
+  i, j : integer;
+begin
+  { Gera Forma Inicial em Forma de Cubo 1x1x1 }
+  { Plano de Simetria }
+  SCP.Sym := True;
+  SCP.SymPlan.X1 := 0;  SCP.SymPlan.Y1 := 0;  SCP.SymPlan.Z1 := 0;
+  SCP.SymPlan.XN := 0;  SCP.SymPlan.YN := 1;  SCP.SymPlan.ZN := 0;
+
+  { Calado }
+  SCP.Draft := 0.500;
+
+  { Control Polylines }
+  SCP.N := 2;
+  SetLength(SCP.P,SCP.N+1);   SetLength(SCP.Link,SCP.N+1);
+  SetLength(SCP.L1,SCP.N+1);  SetLength(SCP.LN,SCP.N+1);
+
+  { Seção 1 }
+  SCP.P[1].Npoly := 4;
+  SCP.P[1].Closed := False;
+  SetLength(SCP.P[1].X,SCP.P[1].Npoly+1);  SetLength(SCP.P[1].Y,SCP.P[1].Npoly+1);
+  SetLength(SCP.P[1].Z,SCP.P[1].Npoly+1);
+  SCP.P[1].X[1] := -0.500;  SCP.P[1].Y[1] := 0.000;  SCP.P[1].Z[1] := 0.000;
+  SCP.P[1].X[2] := -0.500;  SCP.P[1].Y[2] := 0.500;  SCP.P[1].Z[2] := 0.000;
+  SCP.P[1].X[3] := -0.500;  SCP.P[1].Y[3] := 0.500;  SCP.P[1].Z[3] := 1.000;
+  SCP.P[1].X[4] := -0.500;  SCP.P[1].Y[4] := 0.000;  SCP.P[1].Z[4] := 1.000;
+
+  { Seção 2 }
+  SCP.P[2].Npoly := 4;
+  SCP.P[2].Closed := False;
+  SetLength(SCP.P[2].X,SCP.P[2].Npoly+1);  SetLength(SCP.P[2].Y,SCP.P[2].Npoly+1);
+  SetLength(SCP.P[2].Z,SCP.P[2].Npoly+1);
+  SCP.P[2].X[1] := 0.500;  SCP.P[2].Y[1] := 0.000;  SCP.P[2].Z[1] := 0.000;
+  SCP.P[2].X[2] := 0.500;  SCP.P[2].Y[2] := 0.500;  SCP.P[2].Z[2] := 0.000;
+  SCP.P[2].X[3] := 0.500;  SCP.P[2].Y[3] := 0.500;  SCP.P[2].Z[3] := 1.000;
+  SCP.P[2].X[4] := 0.500;  SCP.P[2].Y[4] := 0.000;  SCP.P[2].Z[4] := 1.000;
+
+  { Associações }
+  SCP.Link[1] := 2;  SCP.L1[1] := 1;  SCP.LN[1] := 4;
+
+  SCP.Link[2] := 0;  SCP.L1[2] := 0;  SCP.LN[2] := 0;
+
+  { Condensamento de todos os pontos }
+  for i:= 1 to SCP.N do
+  begin
+    SetLength(SCP.P[i].Merged,SCP.P[i].Npoly+1);
+    for j := 1 to SCP.P[i].Npoly do
+      SCP.P[i].Merged[j] := True;
+  end;
+
+end;  { TSCPClass.InitializeSCP }
+
+class procedure TSCPClass.MirrorCopy(var SCP : TSCP);
+var                { Adds to SCP a mirrored copy after the last poly }
+  i, j : integer;  { in the same order }
+begin
+  with SCP do
+  begin
+    j := N;
+    for i := 1 to N do
+    begin
+      j := j + 1;
+      SetLength(P,j+1);   SetLength(Link,j+1);
+      SetLength(L1,j+1);  SetLength(LN,j+1);
+      P[j] := TPoly.Mirror(P[i],SCP.SymPlan);
+      If Link[i]<>0 then
+      begin
+        Link[j] := j+Link[i]-i;
+        L1[j] := L1[i];  LN[j] := LN[i];
+      end
+      Else begin
+        Link[j] := 0;
+        L1[j] := 0;  LN[j] := 0;
+      end;
+    end;
+    N := j;
+  end;
+end;  { TSCPClass.MirrorCopy }
+
+class procedure TSCPClass.ChangeReference(Origin : T3DPoint; var SCP : TSCP);
+var                { Changes the point of reference of SCP data point coordinates }
+  i : integer;
+begin
+  for i := 1 to SCP.N do
+    TPoly.Reference_3DPline(Origin.X,Origin.Y,Origin.Z,SCP.P[i]);
+end;  { TSCPClass.ChangeReference }
+
+class procedure TSCPClass.ChangeMirrorPlan(Plan : TPlan; var SCP : TSCP);
+var                { Changes SCP Symmetry Plan }
+  i, j : integer;
+begin
+  with SCP do
+  begin
+    SymPlan := Plan;
+    for i := 1 to N div 2 do
+    begin
+      j := InvSymInteger(i,N);
+      P[j] := TPoly.Mirror(P[i],SCP.SymPlan);
+    end;
+  end;
+end;  { TSCPClass.MirrorCopy }
+
+class function TSCPClass.PlanarSurface(SCP : TSCP) : TMesh;
+var
+  i, j, k, l, m, n : integer;
+  txt : text;
+  BP : TMatrizN3;
+  Pline_P1, Pline_P2 : T3DPline;   { Polylines para Geração de Superfície }
+  Faces : TMesh;                   { Triângulos gerados entre Pline_P1 e Pline_P2 }
+  strmsg : string;
+begin                              { 05/01/2014 escrever dados em arquivo externo binário e ver o tamanho }
+  { Geração de Superfície - Surface Control Polylines (SCP) }
+  N := 0;
+  {strmsg := 'N'+char(9)+'X'+char(9)+'Polígonos'+char(13);}
+  for i := 1 to SCP.N do    { Em cada polígono i }
+  begin
+    Pline_P1.Npoly := SCP.P[i].Npoly;
+    SetLength(Pline_P1.X,Pline_P1.Npoly+1);  SetLength(Pline_P1.Y,Pline_P1.Npoly+1);
+    SetLength(Pline_P1.Z,Pline_P1.Npoly+1);
+    If SCP.P[i].Closed = False then
+      Pline_P1.Closed := False       { Poligonal Aberta }
+    Else Pline_P1.Closed := True;    { Poligonal Fechada }
+
+    for m := 1 to Pline_P1.Npoly do     { Cópia da Poligonal de Partida }
+    begin
+      Pline_P1.X[m] := SCP.P[i].X[m];
+      Pline_P1.Y[m] := SCP.P[i].Y[m];
+      Pline_P1.Z[m] := SCP.P[i].Z[m];
+    end;
+
+    If TPoly.Gap(Pline_P1) = True then
+        Pline_P1.Closed := False
+      Else Pline_P1.Closed := True;
+
+    If SCP.Link[i] > 0 then
+    begin
+      If SCP.P[SCP.Link[i]].Closed = False then      { Poligonal Aberta }
+        Pline_P2.Closed := False
+      Else If SCP.P[SCP.Link[i]].Closed = True then  { Poligonal Fechada }
+        Pline_P2.Closed := True;
+      j := Min(SCP.L1[i],SCP.LN[i]);  k := Max(SCP.L1[i],SCP.LN[i]);
+      Pline_P2.Npoly := k-j+1;
+      SetLength(Pline_P2.X,Pline_P2.Npoly+1); SetLength(Pline_P2.Y,Pline_P2.Npoly+1);
+      SetLength(Pline_P2.Z,Pline_P2.Npoly+1);
+
+      for m := 1 to Pline_P2.Npoly do   { Cópia da Poligonal de Chegada }
+      begin
+        Pline_P2.X[m] := SCP.P[SCP.Link[i]].X[m+j-1];
+        Pline_P2.Y[m] := SCP.P[SCP.Link[i]].Y[m+j-1];
+        Pline_P2.Z[m] := SCP.P[SCP.Link[i]].Z[m+j-1];
+      end;
+
+      If TPoly.Gap(Pline_P2) = True then
+        Pline_P2.Closed := False
+      Else Pline_P2.Closed := True;
+
+      { Alinha Pline_P1 e Pline_P2 por seus pontos iniciais }
+      //Pline_P2 := TPoly.Align(Pline_P1,Pline_P2);
+      //Pline_P1 := TPoly.Align(Pline_P2,Pline_P1);
+
+      { Gera triângulos }
+      Faces := TSurf.Pol_Pol_Surf(Pline_P1,Pline_P2);
+      N := N + Faces.N;
+      Result := TSurf.AddMesh(Faces,Result,N);
+      {strmsg := strmsg+IntToStr(i)+char(9)+FloatToStrF(Pline_P2.X[1],fffixed,7,3)+char(9)+
+                       //IntToStr(Faces.N)+char(13);}
+    end;
+  end;
+  //ShowMessage(strmsg+' Total of '+IntToStr(N)+' Result.N '+IntToStr(Result.N));
+  {StringToText(txt,'polígonos.txt',strmsg);}
+end;  { TSCPClass.PlanarSurface }
+
+class function TSCPClass.PlanarSplineSurface(SCP : TSCP) : TMesh;
+var
+  i, j, k, l, m, n : integer;
+  txt : text;
+  BP : TMatrizN3;
+  Pline_P1, Pline_P2 : T3DPline;   { Polylines para Geração de Superfície }
+  Faces : TMesh;                   { Triângulos gerados entre Pline_P1 e Pline_P2 }
+  strmsg : string;
+begin                              { 05/01/2014 escrever dados em arquivo externo binário e ver o tamanho }
+  { Geração de Superfície - Surface Control Polylines (SCP) }
+  N := 0;
+  {strmsg := 'N'+char(9)+'X'+char(9)+'Polígonos'+char(13);}
+  for i := 1 to SCP.N do    { Em cada polígono i }
+  begin
+    Pline_P1.Npoly := SCP.P[i].Npoly;
+    SetLength(Pline_P1.X,Pline_P1.Npoly+1);  SetLength(Pline_P1.Y,Pline_P1.Npoly+1);
+    SetLength(Pline_P1.Z,Pline_P1.Npoly+1);
+    If SCP.P[i].Closed = False then
+      Pline_P1.Closed := False       { Poligonal Aberta }
+    Else Pline_P1.Closed := True;    { Poligonal Fechada }
+
+    for m := 1 to Pline_P1.Npoly do
+    begin
+      Pline_P1.X[m] := SCP.P[i].X[m];
+      Pline_P1.Y[m] := SCP.P[i].Y[m];
+      Pline_P1.Z[m] := SCP.P[i].Z[m];
+    end;
+
+    If TPoly.Gap(Pline_P1) = True then
+        Pline_P1.Closed := False
+      Else Pline_P1.Closed := True;
+
+    If SCP.Link[i] > 0 then
+    begin
+      If SCP.P[SCP.Link[i]].Closed = False then      { Poligonal Aberta }
+        Pline_P2.Closed := False
+      Else If SCP.P[SCP.Link[i]].Closed = True then  { Poligonal Fechada }
+        Pline_P2.Closed := True;
+      j := Min(SCP.L1[i],SCP.LN[i]);  k := Max(SCP.L1[i],SCP.LN[i]);
+      Pline_P2.Npoly := k-j+1;
+      SetLength(Pline_P2.X,Pline_P2.Npoly+1); SetLength(Pline_P2.Y,Pline_P2.Npoly+1);
+      SetLength(Pline_P2.Z,Pline_P2.Npoly+1);
+
+      for m := 1 to Pline_P2.Npoly do
+      begin
+        Pline_P2.X[m] := SCP.P[SCP.Link[i]].X[m+j-1];
+        Pline_P2.Y[m] := SCP.P[SCP.Link[i]].Y[m+j-1];
+        Pline_P2.Z[m] := SCP.P[SCP.Link[i]].Z[m+j-1];
+      end;
+
+      If TPoly.Gap(Pline_P2) = True then
+        Pline_P2.Closed := False
+      Else Pline_P2.Closed := True;
+
+      { Alinha Pline_P1 e Pline_P2 por seus pontos iniciais }
+      //Pline_P2 := TPoly.Align(Pline_P1,Pline_P2);
+      //Pline_P1 := TPoly.Align(Pline_P2,Pline_P1);
+
+      { Gera triângulos }
+      Faces := TSurf.Pol_Pol_Surf(Pline_P1,Pline_P2);
+      N := N + Faces.N;
+      Result := TSurf.AddMesh(Faces,Result,N);
+      {strmsg := strmsg+IntToStr(i)+char(9)+FloatToStrF(Pline_P2.X[1],fffixed,7,3)+char(9)+
+                       //IntToStr(Faces.N)+char(13);}
+    end;
+  end;
+  //ShowMessage(strmsg+' Total of '+IntToStr(N)+' Result.N '+IntToStr(Result.N));
+  {StringToText(txt,'polígonos.txt',strmsg);}
+end;  { TSCPClass.PlanarSplineSurface }
+
+class function TSCPClass.CoincidentPoly(A, B : integer; var SCP : TSCP) : boolean;
+var                   { Determina se todos os pontos de P[A] estão ordenadamente contidos }
+  i, j : integer;     { em P[B]. Se sim, deleta P[A] e liga a P[B] o polígono i }
+begin                 { que se ligava a P[A] ou a que P[A] se ligava. }
+  Result := False;
+  with SCP do
+  begin
+    //If (Between(A,1,SCP.N)>=0) and (Between(B,1,SCP.N)>=0) then
+      If TPoly.CoincidentTest(P[A],P[B]) then
+      begin
+        Result := True;
+        If Link[A]<>0 then           { A é Partida: A se liga a i }
+          i := Link[A]
+        Else
+          i := FindValue(N,Link,A);  { A é Chegada: i se liga a A }
+
+        j := P[A].Npoly;
+
+        L1[i] := TPoly.PointIndex(P[A].X[1],P[A].Y[1],P[A].Z[1],P[B]);
+        LN[i] := TPoly.PointIndex(P[A].X[j],P[A].Y[j],P[A].Z[j],P[B]);
+        Link[i] := B;
+        DeletePoly(A,B,L1[i],LN[i],SCP);
+      end;
+  end;
+end;  { TSCPClass.CoincidentPoly }
+
+class procedure TSCPClass.CoincidentPoints(SCP : TSCP; X, Y, Z : TFloatType; var Npts : integer; var Lin, Pnt : TVetorIN);
+var                                  { Determina os índices dos pontos de SCP coincidentes com }
+  i,j,k : integer;                     { o ponto (X,Y,Z) }
+begin
+  Npts := 0;
+  If SCP.Sym = False then
+    k := SCP.N
+  Else k := SCP.N div 2;
+
+  for i := 1 to k do
+  begin
+    for j := 1 to SCP.P[i].Npoly do
+    begin
+      if (EqualPoints(X,Y,Z,SCP.P[i].X[j],SCP.P[i].Y[j],SCP.P[i].Z[j]) = True) then
+      begin
+        Npts := Npts + 1;
+        SetLength(Lin,Npts+1);   SetLength(Pnt,Npts+1);
+        Lin[Npts] := i;
+        Pnt[Npts] := j;
+      end;
+    end;
+  end;
+end;  { TSCPClass.CoincidentPoints }
+
+(*class procedure TSCPClass.ReadSCP(SCPFileName : string; var SCP : TSCP);
+var                               { Leitura dos Dados de SCP }
+  SCPFile : text;
+  i,j,k,l : integer;
+  char1   : char;
+begin
+  AssignFile(SCPFile,SCPFileName);
+
+  Reset(SCPFile);
+
+  readln(SCPFile);                { Ship Surface CAD 2013 }
+  readln(SCPFile);                { Surface Control Polylines }
+  readln(SCPFile,char1);          { Symmetry (S) / Assymmetry (A) }
+  If (char1 = 'S') or (char1 ='s') then
+  begin
+    SCP.Sym := True;
+    readln(SCPFile,SCP.SymPlan.X1,SCP.SymPlan.Y1,SCP.SymPlan.Z1);    { X1 Y1 Z1 ponto do plano de simetria }
+    readln(SCPFile,SCP.SymPlan.XN,SCP.SymPlan.YN,SCP.SymPlan.ZN);    { XN YN ZN vetor normal do plano de simetria }
+  end
+  Else
+    SCP.Sym := False;
+
+  readln(SCPFile);                      { Pula linha }
+  readln(SCPFile);                      { Draft }
+  readln(SCPFile,SCP.Draft);            { Valor do Calado }
+  readln(SCPFile);                      { Pula linha }
+  readln(SCPFile);                      { polygons }
+  readln(SCPFile,SCP.N);                { Número de polígonos }
+  readln(SCPFile);                      { Pula linha }
+
+  SetLength(SCP.P,SCP.N+1);   SetLength(SCP.Link,SCP.N+1);
+  SetLength(SCP.L1,SCP.N+1);  SetLength(SCP.LN,SCP.N+1);
+
+  for i := 1 to SCP.N do
+  begin
+    readln(SCPFile);                    { polygon i }
+    readln(SCPFile,SCP.P[i].Npoly);     { Número de Pontos em cada Polígono }
+    readln(SCPFile,char1);                   { Polígono Aberto (Opened) ou Fechado (Closed) }
+    If (char1 = 'O') or (char1 ='o') then
+      SCP.P[i].Closed := False
+    Else SCP.P[i].Closed := True;
+
+    SetLength(SCP.P[i].X,SCP.P[i].Npoly+1);  SetLength(SCP.P[i].Y,SCP.P[i].Npoly+1);
+    SetLength(SCP.P[i].Z,SCP.P[i].Npoly+1);
+
+    readln(SCPFile);              { X       Y       Z }
+    for j := 1 to SCP.P[i].Npoly do
+      readln(SCPFile,SCP.P[i].X[j],SCP.P[i].Y[j],SCP.P[i].Z[j]);
+    readln(SCPFile);                      { Polygon linked }
+    readln(SCPFile,SCP.Link[i],SCP.L1[i],SCP.LN[i]);    { Identificação do polígono ligado ao polígono i }
+                                                        { e dos pontos iniciais e finais de ligação }
+
+    readln(SCPFile);        { Pula linha para próximo poligono }
+  end;
+
+  closefile(SCPFile);
+
+  for i := 1 to SCP.N do
+  begin
+    SCP.L1[i] := Confine(SCP.L1[i],1,SCP.P[SCP.Link[i]].Npoly);
+    SCP.LN[i] := Confine(SCP.LN[i],1,SCP.P[SCP.Link[i]].Npoly);
+    If SCP.L1[i] > SCP.LN[i] then
+      SwapValues(SCP.L1[i],SCP.LN[i]);
+  end;
+
+  for i := 1 to SCP.N do
+  begin
+    SetLength(SCP.P[i].Merged,SCP.P[i].Npoly+1);
+    for j := 1 to SCP.P[i].Npoly do
+      SCP.P[i].Merged[j] := True;
+  end;
+end;  { TSCPClass.ReadSCP } *)
+
+class procedure TSCPClass.ReadSCP(SCPFileName : string; var SCP : TSCP);
+var                               { Leitura dos Dados de SCP }
+  SCPFile : text;
+  i,j,k,l : integer;
+  char1   : char;
+  ch1,ch2,ch3,ch4,ch5,ch6 : char;
+  CoordStr : string;
+begin
+  AssignFile(SCPFile,SCPFileName);
+
+  Reset(SCPFile);
+
+  readln(SCPFile);                { Ship Surface CAD 2013 }
+  readln(SCPFile);                { Surface Control Polylines }
+  readln(SCPFile,char1);          { Symmetry (S) / Assymmetry (A) }
+  If (char1 = 'S') or (char1 ='s') then
+  begin
+    SCP.Sym := True;
+    readln(SCPFile,SCP.SymPlan.X1,SCP.SymPlan.Y1,SCP.SymPlan.Z1);    { X1 Y1 Z1 ponto do plano de simetria }
+    readln(SCPFile,SCP.SymPlan.XN,SCP.SymPlan.YN,SCP.SymPlan.ZN);    { XN YN ZN vetor normal do plano de simetria }
+  end
+  Else
+    SCP.Sym := False;
+
+  readln(SCPFile);                      { Pula linha }
+  readln(SCPFile);                      { Draft }
+  readln(SCPFile,SCP.Draft);            { Valor do Calado }
+  readln(SCPFile);                      { Pula linha }
+
+  i := 0;
+  ch1 := #0;  ch2 := #0;
+  repeat
+  begin
+    readln(SCPFile,ch1);
+    //ShowMessage(ch1+' '+IntToStr(i));
+    If (ch1 = 'p') or (ch1 = 'P') then  { polygon i }
+    begin
+      i := i + 1;
+      SCP.N := i;
+      SetLength(SCP.P,SCP.N+1);   SetLength(SCP.Link,SCP.N+1);
+      SetLength(SCP.L1,SCP.N+1);  SetLength(SCP.LN,SCP.N+1);
+      readln(SCPFile,ch2);                   { Polígono Aberto (Opened) ou Fechado (Closed) }
+      If (ch2 = 'O') or (ch2 ='o') then
+        SCP.P[i].Closed := False
+      Else SCP.P[i].Closed := True;
+
+      readln(SCPFile);              { X       Y       Z }
+      j := 0;
+      ch3 := #0;
+      repeat
+      begin
+        Readln(SCPFile,CoordStr);
+        ch3 := CoordStr[1];
+        If (ch3 <> 'l') and (ch3 <> 'L') then
+        begin
+          j := j + 1;
+          SCP.P[i].Npoly := j;
+          //ShowMessage(ch3+' '+IntToStr(j)+' '+CoordStr);
+          SetLength(SCP.P[i].X,SCP.P[i].Npoly+1);  SetLength(SCP.P[i].Y,SCP.P[i].Npoly+1);
+          SetLength(SCP.P[i].Z,SCP.P[i].Npoly+1);
+          StringToPoint(CoordStr,SCP.P[i].X[j],SCP.P[i].Y[j],SCP.P[i].Z[j]);
+        end;
+      end;
+      until((ch3 = 'l') or (ch3 = 'L'));
+      readln(SCPFile,SCP.Link[i],SCP.L1[i],SCP.LN[i]);    { Identificação do polígono ligado ao polígono i }
+                                                               { e dos pontos iniciais e finais de ligação }
+      //ShowMessage(ch3+' '+IntToStr(i)+' '+IntToStr(SCP.Link[i])+' '+IntToStr(SCP.L1[i])+' '+IntToStr(SCP.LN[i]));
+    end;
+  end;
+  until ((ch1='E') or (ch1 = 'e'));
+
+  closefile(SCPFile);
+
+  for i := 1 to SCP.N do
+  begin
+    SCP.L1[i] := Confine(SCP.L1[i],1,SCP.P[SCP.Link[i]].Npoly);
+    SCP.LN[i] := Confine(SCP.LN[i],1,SCP.P[SCP.Link[i]].Npoly);
+    If SCP.L1[i] > SCP.LN[i] then
+      SwapValues(SCP.L1[i],SCP.LN[i]);
+  end;
+
+  for i := 1 to SCP.N do
+  begin
+    SetLength(SCP.P[i].Merged,SCP.P[i].Npoly+1);
+    for j := 1 to SCP.P[i].Npoly do
+      SCP.P[i].Merged[j] := True;
+  end;
+end;  { TSCPClass.ReadSCP }
+
+class procedure TSCPClass.WriteSCP(var TXT : text; SCPFileName : string; SCP : TSCP; MinWidth, DecPlaces : integer);
+var
+  i, j, k : integer;
+begin
+  assignfile(TXT,SCPFileName);
+  rewrite(TXT);
+  writeln(TXT,'Ship Surface CAD v1.0');          { Ship Surface CAD v1.0 }
+  writeln(TXT,'Surface Control Polylines');      { Surface Control Polylines }
+
+  If SCP.Sym = True then                       { Symmetry (S) / Assymmetry (A) }
+  begin
+    writeln(TXT,'Symmetry');
+    writeln(TXT,SCP.SymPlan.X1:MinWidth:DecPlaces,char(9),
+                SCP.SymPlan.Y1:MinWidth:DecPlaces,char(9),
+                SCP.SymPlan.Z1:MinWidth:DecPlaces);
+    writeln(TXT,SCP.SymPlan.XN:MinWidth:DecPlaces,char(9),
+                SCP.SymPlan.YN:MinWidth:DecPlaces,char(9),
+                SCP.SymPlan.ZN:MinWidth:DecPlaces);
+  end
+  Else writeln(TXT,'Assymmetry');
+
+  writeln(TXT);                                  { Pula linha }
+  writeln(TXT,'Draft');                          { Draft }
+  writeln(TXT,SCP.Draft:MinWidth:DecPlaces);     { Valor do Calado }
+  writeln(TXT);                                  { Pula linha }
+  //writeln(TXT,'polygons');                       { polygons }
+
+  If SCP.Sym = True then k := SCP.N div 2
+  Else k := SCP.N;
+
+  //writeln(TXT,k);                                { Número de polígonos }
+
+  //writeln(TXT);                                  { Pula linha }
+
+  for i := 1 to k do
+  begin
+    writeln(TXT,'polygon '+IntToStr(i));           { polygon i }
+    //writeln(TXT,SCP.P[i].Npoly);                { Número de Pontos em cada Polígono }
+
+    If SCP.P[i].Closed = False then
+      writeln(TXT,'opened')                     { Polígono Aberto (Opened) }
+    Else writeln(TXT,'closed');                 { Polígono Fechado (Closed) }
+
+    writeln(TXT,'X'+char(9)+'Y'+char(9)+'Z');    { X       Y       Z }
+    with SCP do
+    begin
+      for j := 1 to P[i].Npoly do
+        writeln(TXT,P[i].X[j]:MinWidth:DecPlaces,char(9),
+                    P[i].Y[j]:MinWidth:DecPlaces,char(9),
+                    P[i].Z[j]:MinWidth:DecPlaces);
+    end;
+    writeln(TXT,'Linked');               { Polygon linked }
+    writeln(TXT,SCP.Link[i],char(9),SCP.L1[i],char(9),SCP.LN[i]);  { Identificação do polígono ligado ao polígono i }
+                                                                   { e dos pontos iniciais e finais de ligação }
+
+    writeln(TXT);        { Pula linha para próximo poligono }
+  end;
+
+  writeln(TXT,'EOF');
+  closefile(TXT);
+end;  { TSCPClass.WriteSCP }
+
+class procedure TSCPClass.ResetSCP(var SCP : TSCP);
+begin
+  with SCP do
+  begin
+    Sym := False;       SymPlan := Plan3D(0,0,0,0,1,0);
+    Draft := 0;
+    N := 0;             SetLength(P,1);
+    SetLength(Link,1);  SetLength(L1,1);  SetLength(LN,1);
+  end;
+end;  { TSCPClass.ResetSCP }
+
+class function TSCPClass.SCPPolyToStr(A : integer; SCP : TSCP; SpaceChar : string; Format : TFloatFormat;
+                                      Precision, Digits : Integer) : string;
+begin
+  Result := 'Polyline'+SpaceChar+IntToStr(A)+' of '+IntToStr(SCP.N)+char(13);
+  Result := Result + 'Link['+IntToStr(A)+'] '+IntToStr(SCP.Link[A])+char(13);
+  Result := Result + 'L1['  +IntToStr(A)+'] '+IntToStr(SCP.L1[A])+SpaceChar
+                   + 'LN['  +IntToStr(A)+'] '+IntToStr(SCP.LN[A])+char(13);
+  Result := Result + 'N'+SpaceChar+'X'+SpaceChar+'Y'+SpaceChar+'Z'+char(13);
+  Result := Result + PolyToStr(SCP.P[A].Npoly,SCP.P[A].X,SCP.P[A].Y,SCP.P[A].Z,SpaceChar,Format,Precision,Digits);
+end;  { SCPPolyToStr }
+
+class procedure TSCPClass.TBCToSCP(NS,NW,NC:integer; NPS,NPW,NPC : TVetorIN; XS,YS,ZS,XW,YW,ZW,XC,YC,ZC : TMatrizNxN;
+                                   RDraft : TFloatType; var SCP : TSCP);
+var
+  i,j,k,l,m,p,q,r,s : integer;  strmsg : string;  TextBug : text;
+  I_TF, I1_TF,I2_TF : boolean;
+  Id_TF : TVetorBN;
+  XPol : TVetorN;
+  X1,Y1,Z1 : TVetorN;
+  Id,IdS,IdS1,IdS2,Key : TVetorIN;
+  Poly, PolyW : T3DPline;
+  PolSetNew,PolSetNext,PolSetS,PolSetW1,PolSetW2, PolSetW : TWire;
+begin
+  { Balizas: NS,NPS,(XS,YS,ZS) } { Linhas d'água: NW,NPW,(XW,YW,ZW) } { Quinas: NC,NPC,(XC,YC,ZC) }
+  { SCP.N : Número de Polígonos de SCP }
+  { SCP.Sym :  Todos os polígonos possuem simetria (True) ou não (False) }
+  { SCP.P : Conjunto dos polígonos (array de T3DPline) }
+  { SCP.Link : Lista de Identificação da ordem que um polígono i está ligado a um polígono da lista }
+
+  { PLANO DE SIMETRIA }
+  SCP.SymPlan := Plan3D(0,0,0,0,1,0);   // plano de simetria tradicional
+
+  { CALADO }
+  SCP.Draft := RDraft;
+
+  { GERAÇÃO DE POLÍGONOS }
+  PolSetS.N := 0;
+  { Polígonos das Balizas  - Gera no formato TWire}
+  for i := 1 to NS do
+  begin
+    Poly := TPoly.VectorToPoly(NPS[i],XS[i],YS[i],ZS[i],False);
+    {ShowMessage('Poly '+IntToStr(i)+char(13)+'N'+char(9)+
+    'X'+char(9)+'Y'+char(9)+'Z'+char(13)+PolyToStr(Poly,fffixed,18,18));}
+    { Trim por Plano Diametral }
+    PolSetNew := TPoly.Trim_Plan(Poly,0,0,0,0,1,0);
+    PolSetS := TSetofPoly.Join(PolSetS,PolSetNew);
+  end;
+  {ShowMessage('PolSet.N '+IntToStr(PolSetS.N));
+  for i := 1 to PolSetS.N do
+  begin
+    ShowMessage('Polígono '+IntToStr(i)+char(13)+'N'+char(9)+
+    'X'+char(9)+'Y'+char(9)+'Z'+char(13)+PolyToStr(PolSetS.P[i],fffixed,18,18));
+  end;}
+  { ATENÇÃO : Partição de Polígonos conforme Quinas }
+
+  { POLÍGONO DE POPA }
+  k := NW;
+  SetLength(X1,k+1); SetLength(Y1,k+1); SetLength(Z1,k+1);
+
+  for i := 1 to NW do   { Pontos Iniciais das Linhas d'Água }
+  begin
+    X1[i] := XW[i,1];  Y1[i] := YW[i,1];  Z1[i] := ZW[i,1];
+  end;
+
+  for i := 1 to NS do   { Pontos Iniciais das Balizas }
+  begin
+    If Lower(XS[i,1],XW[1,1],RelPrecision) then
+    begin
+      k := k + 1;
+      SetLength(X1,k+1); SetLength(Y1,k+1); SetLength(Z1,k+1);
+      X1[k] := XS[i,1];  Y1[k] := YS[i,1];  Z1[k] := ZS[i,1];
+    end;
+  end;
+  TPoly.RemoveRepeatedPts(k,X1,Y1,Z1,k,X1,Y1,Z1);
+
+  { Transformação da Nuvem de pontos em Poligonal de Popa }
+  Poly := TPoly.SetofPointsToPoly(k,XW[1,1],YW[1,1],ZW[1,1],XW[NW,1],YW[NW,1],ZW[NW,1],X1,Y1,Z1,False);
+
+  { Poligonal de Popa }
+  PolSetW1.N := 1;  SetLength(PolSetW1.P,2);
+  PolSetW1.P[1] := Poly;
+
+  { POLÍGONO DE PROA }
+  k := NW;
+  SetLength(X1,k+1); SetLength(Y1,k+1); SetLength(Z1,k+1);
+
+  for i := 1 to NW do     { Pontos Finais das Linhas d'Água }
+  begin
+    X1[i] := XW[i,NPW[i]div 2]; Y1[i] := YW[i,NPW[i]div 2]; Z1[i] := ZW[i,NPW[i]div 2];
+  end;
+
+  for i := 1 to NS do     { Pontos Iniciais das Balizas }
+  begin
+    If Greater(XS[i,1],XW[1,NPW[1] div 2],RelPrecision) then
+    begin
+      k := k + 1;
+      SetLength(X1,k+1); SetLength(Y1,k+1); SetLength(Z1,k+1);
+      X1[k] := XS[i,1];  Y1[k] := YS[i,1];  Z1[k] := ZS[i,1];
+    end;
+  end;
+  TPoly.RemoveRepeatedPts(k,X1,Y1,Z1,k,X1,Y1,Z1);
+
+  { Transformação da Nuvem de pontos em Poligonal de Proa }
+  Poly := TPoly.SetofPointsToPoly(k,XW[1,NPW[1] div 2],YW[1,NPW[1] div 2],ZW[1,NPW[1] div 2],
+                                  XW[NW,NPW[NW] div 2],YW[NW,NPW[NW] div 2],ZW[NW,NPW[NW] div 2],X1,Y1,Z1,False);
+
+  { Poligonal de Proa }
+  PolSetW2.N := 1;  SetLength(PolSetW2.P,2);
+  PolSetW2.P[1] := Poly;
+
+  {for i := 1 to PolSetW1.N do
+  begin
+    ShowMessage('Polígono W1 '+IntToStr(i)+char(13)+
+    'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13)+PolyToStr(PolSetW1.P[i],char(9),fffixed,7,3));
+  end;
+
+  for i := 1 to PolSetW2.N do
+  begin
+    ShowMessage('Polígono W2 '+IntToStr(i)+char(13)+
+    'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13)+PolyToStr(PolSetW2.P[i],char(9),fffixed,7,3));
+  end;}
+
+  { Subdivisão dos Polígonos de Popa e Proa - Corte por Planos de Balizas }
+  for i := 1 to NS do
+  begin
+    PolSetW1 := TSetofPoly.Trim_Plan(PolSetW1,XS[i,1],0,0,-1,0,0);
+    PolSetW2 := TSetofPoly.Trim_Plan(PolSetW2,XS[i,1],0,0,-1,0,0);
+  end;
+  PolSetW := TSetofPoly.Join(PolSetW1,PolSetW2);
+
+  {If PolSetW.N > 0 then
+    for i := 1 to PolSetW.N do
+    begin
+      ShowMessage('Polígono W '+IntToStr(i)+char(9)+'of '+IntToStr(PolSetW.N)+char(13)+
+      'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13)+PolyToStr(PolSetW.P[i],char(9),fffixed,18,18));
+    end
+    Else ShowMessage('Polígono W  Total of 0');}
+
+  { CONEXÃO ENTRE POLÍGONOS }
+  SCP.N := 0;
+  { Polylines de PolSetW fora de X = 0 .. LPP }
+  j := 0;
+  for i := 1 to PolSetW.N do    { Em cada Polyline de PolSetW }
+  begin
+    If TPoly.InsideXBoundary(PolSetW.P[i],XS[1,1],XS[NS,1]) = False then
+    begin        { Se a Polyline estiver fora de X = 0 .. LPP }
+
+      j := 0;  I_TF := False;
+      repeat
+      begin      { Verifica ponto em comum com PolSetS fora de X = 0 .. LPP }
+        j := j + 1;
+        If OutRangeEq(PolSetS.P[j].X[1],XS[1,1],XS[NS,1],RelPrecision) then
+          I_TF := TPoly.PtInCommon(PolSetW.P[i],PolSetS.P[j],l,m)
+        Else I_TF := False;
+        {ShowMessage('PolSetW.P['+IntToStr(i)+']'+char(13)+
+                    PolyToStr(PolSetW.P[i],char(9),fffixed,18,18)+char(13)+
+                    'PolSetS.P['+IntToStr(j)+']'+char(13)+
+                    PolyToStr(PolSetS.P[j],char(9),fffixed,18,18)+char(13)+
+                    ' I_TF '+BoolToStr(I_TF,True));}
+      end;
+      until((j = PolSetS.N) or (I_TF = True));
+      If I_TF = True then  { Se existir ponto em comum }
+      begin
+        {ShowMessage('Polígono W '+IntToStr(i)+char(9)+'of '+IntToStr(PolSetW.N)+char(9)+'j = '+IntToStr(j)+char(13)+
+        'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13)+PolyToStr(PolSetW.P[i],char(9),fffixed,7,3));}
+        { Cria e Associa Polylines }
+        with SCP do
+        begin
+          N := N + 1;
+          SetLength(P,N+1); SetLength(Link,N+1);
+          P[N].Closed := False;        P[N].Npoly := PolSetW.P[i].Npoly;
+        end;
+
+        If (TPoly.InsideXBoundary(PolSetW.P[i],XS[1,1],XS[NS,1]) = True) or
+           (TPoly.LeftofXBoundary(PolSetW.P[i],XS[1,1],XS[NS,1]) = True) then
+        begin
+          with SCP do
+          begin
+            Link[N] := N+1;
+
+            TPoly.PolyToPoints(PolSetW.P[i],P[N].X,P[N].Y,P[N].Z);
+
+            N := N + 1;
+            SetLength(P,N+1); SetLength(Link,N+1);
+            P[N].Closed := False;        P[N].Npoly := PolSetS.P[j].Npoly;
+            Link[N] := 0;
+            TPoly.PolyToPoints(PolSetS.P[j],P[N].X,P[N].Y,P[N].Z);
+          end;
+        end
+        Else If TPoly.RightofXBoundary(PolSetW.P[i],XS[1,1],XS[NS,1]) = True then
+        begin
+          with SCP do
+          begin
+            Link[N] := 0;
+            TPoly.PolyToPoints(PolSetW.P[i],P[N].X,P[N].Y,P[N].Z);
+          end;
+        end;
+      end;
+    end;
+  end;
+
+  {for i := 1 to SCP.N do
+  begin
+    strmsg := 'Polyline'+char(9)+IntToStr(i)+' of '+IntToStr(SCP.N)+char(13);
+    strmsg := strmsg + 'Link['+IntToStr(i)+'] '+IntToStr(SCP.Link[i])+char(13);
+    strmsg := strmsg + 'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13);
+    strmsg := strmsg + PolyToStr(SCP.P[i].Npoly,SCP.P[i].X,SCP.P[i].Y,SCP.P[i].Z,char(9),fffixed,18,18);
+    ShowMessage(strmsg);
+  end;}
+
+  { Polylines de PolSetW dentro de X = 0 .. LPP }
+  { Modificação das Polylines das Balizas e Associação de Polylines }
+  for i := 1 to NS-1 do
+  begin
+    { Localiza polylines de PolSetW em X = XS[i]..XS[i+1] }
+    Id := TSetofPoly.InsideXBoundary(PolSetW,XS[i,1],XS[i+1,1],l);
+    {strmsg := 'Station '+FloatToStrF(XS[i,1],fffixed,18,18)+char(13)+
+              'N'+char(9)+'Id'+char(9)+'Total of '+IntToStr(l)+char(13);
+    for j := 1 to l do
+      strmsg := strmsg + IntToStr(j) + char(9) + IntToStr(Id[j]) +char(13);
+    ShowMessage(strmsg);}
+
+    { Localiza polylines de PolSetS em X = XS[i] e Cria Subconjunto PolSetNew }
+    IdS := TSetofPoly.InXCoordinate(PolSetS,XS[i,1],m);
+    PolSetNew := TSetofPoly.Subset(m,IdS,PolSetS);
+
+    {If PolSetNew.N > 0 then
+      for j := 1 to PolSetNew.N do
+      begin
+        strmsg := 'PolSetNew'+char(9)+IntToStr(j)+' of '+IntToStr(PolSetNew.N)+char(13);
+        strmsg := strmsg + 'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13);
+        If PolSetNew.P[j].Npoly > 0 then
+          strmsg := strmsg + PolyToStr(PolSetNew.P[j],fffixed,18,18)
+        Else strmsg := strmsg  + '0 points';
+        ShowMessage(strmsg);
+      end
+    Else ShowMessage('PolSetNew.N = 0');}
+
+    { Localiza polylines de PolSetS em X = XS[i+1] e Cria Subconjunto PolSetNext }
+    IdS := TSetofPoly.InXCoordinate(PolSetS,XS[i+1,1],p);
+    PolSetNext := TSetofPoly.Subset(p,IdS,PolSetS);
+
+    {If PolSetNext.N > 0 then
+      for j := 1 to PolSetNew.N do
+      begin
+        strmsg := 'PolSetNext'+char(9)+IntToStr(j)+' of '+IntToStr(PolSetNext.N)+char(13);
+        strmsg := strmsg + 'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13);
+        If PolSetNext.P[j].Npoly > 0 then
+          strmsg := strmsg + PolyToStr(PolSetNext.P[j],fffixed,18,18)
+        Else strmsg := strmsg  +'0 points';
+        ShowMessage(strmsg);
+      end
+    Else ShowMessage('PolSetNext.N = 0');}
+
+    If l > 0 then     { Se existem polylines de PolSetW em X = XS[i]..XS[i+1] }
+    Begin
+      { Modifica Polylines de PolSetNew e PolSetNext }
+      for j := 1 to l do  { Em cada polyline de PolSetW em X = XS[i]..XS[i+1] }
+      begin
+        PolyW := PolSetW.P[Id[j]];  { Polyline de PolSetW em X = XS[i]..XS[i+1] }
+        { Identifica ordem das polylines de PolSetNew e PolSetNext com pontos em comum com PolyW }
+        IdS1 := TSetofPoly.PolyWithPtInCommon(PolyW,PolSetNew,r);
+        IdS2 := TSetofPoly.PolyWithPtInCommon(PolyW,PolSetNext,s);
+
+        {strmsg := 'N'+char(9)+'IdS1'+char(9)+'Total of '+IntToStr(r)+char(13);
+        If r > 0 then
+          for k := 1 to r do
+            strmsg := strmsg + IntToStr(k) + char(9) + IntToStr(IdS1[k]) +char(13)
+        Else strmsg := strmsg + '0 points';
+        ShowMessage(strmsg);
+
+        strmsg := 'N'+char(9)+'IdS2'+char(9)+'Total of '+IntToStr(s)+char(13);
+        If s > 0 then
+          for k := 1 to s do
+            strmsg := strmsg + IntToStr(k) + char(9) + IntToStr(IdS2[k]) +char(13)
+        Else strmsg := strmsg + '0 points';
+        ShowMessage(strmsg);}
+
+        If (r <> 0) and ((s <> 0) or (s = 0)) then      { Pontos em comum com as duas balizas XS[i] e XS[i+1] }
+        begin                                           { ou Pontos em comum apenas com a primeira baliza XS[i] }
+          { Escolhe a primeira baliza (PolSetNew) e une as polylines com ponto em comum }
+          Poly := TPoly.Weld(PolSetNew.P[IdS1[1]],PolyW);
+          If r > 1 then
+            for k := 2 to r do
+              Poly := TPoly.Weld(Poly,PolSetNew.P[IdS1[k]]);
+          { Se a baliza teve sua forma modificada, ela deve ser atualizada em PolSetNew para o próximo j }
+          PolSetNew := TSetofPoly.DeleteListofPoly(r,IdS1,PolSetNew);
+          PolSetNew := TSetofPoly.AddPoly(PolSetNew,Poly,PolSetNew.N);
+          {If PolSetNew.N > 0 then
+            for k := 1 to PolSetNew.N do
+            begin
+              strmsg := 'PolSetNew'+char(9)+IntToStr(k)+' of '+IntToStr(PolSetNew.N)+char(13);
+              strmsg := strmsg + 'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13);
+              If PolSetNew.P[k].Npoly > 0 then
+                strmsg := strmsg + PolyToStr(PolSetNew.P[k],fffixed,18,18)
+              Else strmsg := strmsg  + '0 points';
+              ShowMessage(strmsg);
+            end
+            Else ShowMessage('PolSetNew.N = 0');}
+        end
+        Else If (r = 0) and (s <> 0) then  { Pontos em comum apenas com a segunda baliza XS[i+1] }
+        begin
+          { Escolhe a segunda baliza (PolSetNext) e une as polylines com ponto em comum }
+          Poly := TPoly.Weld(PolSetNext.P[IdS2[1]],PolyW);
+          If s > 1 then
+            for k := 2 to s do
+              Poly := TPoly.Weld(Poly,PolSetNext.P[IdS2[k]]);
+          { Se a baliza teve sua forma modificada, ela deve ser atualizada em PolSetNext para o próximo j }
+          PolSetNext := TSetofPoly.DeleteListofPoly(s,IdS2,PolSetNext);
+          PolSetNext := TSetofPoly.AddPoly(PolSetNext,Poly,PolSetNext.N);
+          {If PolSetNext.N > 0 then
+            for k := 1 to PolSetNew.N do
+            begin
+              strmsg := 'PolSetNext'+char(9)+IntToStr(k)+' of '+IntToStr(PolSetNext.N)+char(13);
+              strmsg := strmsg + 'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13);
+              If PolSetNext.P[k].Npoly > 0 then
+                strmsg := strmsg + PolyToStr(PolSetNext.P[k],fffixed,18,18)
+              Else strmsg := strmsg  +'0 points';
+              ShowMessage(strmsg);
+            end
+            Else ShowMessage('PolSetNext.N = 0');}
+        end;
+      end;
+      { Cria um par de Polylines SCP (PolSetNew e PolSetNext) }
+      for j := 1 to PolSetNew.N do
+      begin
+        with SCP do
+        begin
+          N := N + 1;
+          SetLength(P,N+1); SetLength(Link,N+1);
+          P[N].Closed := False;    P[N].Npoly := PolSetNew.P[j].Npoly;
+          Link[N] := N+1;  { Estimativa inicial da conexão }
+          TPoly.PolyToPoints(PolSetNew.P[j],P[N].X,P[N].Y,P[N].Z);
+        end;
+      end;
+      for j := 1 to PolSetNext.N do
+      begin
+        with SCP do
+        begin
+          N := N + 1;
+          SetLength(P,N+1); SetLength(Link,N+1);
+          P[N].Closed := False;    P[N].Npoly := PolSetNext.P[j].Npoly;
+          Link[N] := 0;  { Segmento terminal }
+          TPoly.PolyToPoints(PolSetNext.P[j],P[N].X,P[N].Y,P[N].Z);
+        end;
+      end;
+    End
+    Else If l = 0 then     { Se não existir nenhuma polyline de PolSetW em XS[i]..XS[i+1] }
+    Begin
+      { Cria um par de Polylines SCP (PolSetNew e PolSetNext) }
+      for j := 1 to PolSetNew.N do
+      begin
+        with SCP do
+        begin
+          N := N + 1;
+          SetLength(P,N+1); SetLength(Link,N+1);
+          P[N].Npoly := PolSetNext.P[j].Npoly;
+          P[N].Closed := False;   P[N].Npoly := PolSetNew.P[j].Npoly;
+          Link[N] := N+1;  { Estimativa inicial da conexão }
+          TPoly.PolyToPoints(PolSetNew.P[j],P[N].X,P[N].Y,P[N].Z);
+        end;
+      end;
+      for j := 1 to PolSetNext.N do
+      begin
+        with SCP do
+        begin
+          N := N + 1;
+          SetLength(P,N+1); SetLength(Link,N+1);
+          P[N].Closed := False;   P[N].Npoly := PolSetNext.P[j].Npoly;
+          Link[N] := 0;  { Estimativa inicial da conexão }
+          TPoly.PolyToPoints(PolSetNext.P[j],P[N].X,P[N].Y,P[N].Z);
+        end;
+      end;
+    End;
+  end;
+  { Última Baliza i = NS }
+  i := NS;
+  { Localiza polylines de PolSetS em X = XS[i] e Cria Subconjunto PolSetNew }
+  IdS := TSetofPoly.InXCoordinate(PolSetS,XS[i,1],m);
+  PolSetNew := TSetofPoly.Subset(m,IdS,PolSetS);
+  for j := 1 to PolSetNew.N do
+  begin
+    with SCP do
+    begin
+      N := N + 1;
+      SetLength(P,N+1); SetLength(Link,N+1);
+      P[N].Closed := False;           P[N].Npoly := PolSetNew.P[j].Npoly;
+      Link[N] := N-2;  { Informação que será corrigida logo após a formação de SCP.P }
+      TPoly.PolyToPoints(PolSetNew.P[j],P[N].X,P[N].Y,P[N].Z);
+    end;
+  end;
+
+  { Eliminação de Polylines Repetidas }
+  i := 1;
+  with SCP do
+  begin
+    SetLength(SCP.L1,SCP.N+1);  SetLength(SCP.LN,SCP.N+1);
+    repeat
+    begin
+      j := i;
+      I_TF := False;
+      repeat
+      begin
+        Inc(j);
+        if (TPoly.EqualTest(P[i],P[j]) = True) then
+        begin    { Polylines exatamente idênticas }
+          I_TF := True;
+          If Link[i] = 0 then
+          begin
+            DeletePoly(i,j,0,0,SCP);
+            Dec(i);
+          end
+          Else If Link[j] = 0 then
+          begin
+            DeletePoly(j,i,0,0,SCP);
+          end;
+        end;
+      end;
+      until((j = N) or (I_TF = True));
+      Inc(i);
+    end;
+    until(i >= N);
+  end;
+
+  { Ordena Polylines conforme SCP.P[i].X[1] }
+  SetLength(XPol,SCP.N+1);
+  for i := 1 to SCP.N do
+    XPol[i] := MeanValueN(SCP.P[i].X);
+  XPol := QuickSortMap(SCP.N,XPol,Key);
+  with SCP do
+  begin
+    P := RefSort(N,P,Key);   Link := RefSort(N,Link,Key);
+  end;
+
+  {strmsg := VectorToStr(SCP.Link,'   ');
+  ShowMessage(strmsg);}
+
+  {for i := 1 to SCP.N do
+  begin
+    strmsg := 'Polyline'+char(9)+IntToStr(i)+' of '+IntToStr(SCP.N)+char(13);
+    strmsg := strmsg + 'Link['+IntToStr(i)+'] '+IntToStr(SCP.Link[i])+char(13);
+    strmsg := strmsg + 'L1['  +IntToStr(i)+'] '+IntToStr(SCP.L1[i])+char(9)
+                     + 'LN['  +IntToStr(i)+'] '+IntToStr(SCP.LN[i])+char(13);
+    strmsg := strmsg + 'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13);
+    strmsg := strmsg + PolyToStr(SCP.P[i].Npoly,SCP.P[i].X,SCP.P[i].Y,SCP.P[i].Z,char(9),fffixed,18,18);
+    ShowMessage(strmsg);
+  end;}
+
+  { Insere Link[i] = 0 sempre como segundo segmento }
+  SetLength(XPol,0);  SetLength(Id,0);  SetLength(Key,0);
+  { Executa Associação de Polylines }
+  with SCP do
+  begin
+    for i := 1 to N-1 do
+    begin
+      If Link[i]<>0 then    { Se a polyline se conecta a alguma polyline }
+      begin
+        { Verifica a polyline de Menor distância à Polyline i }
+        k := 0;
+        for j := i+1 to N do
+        begin
+          If (TPoly.EqualTest(P[i],P[j]) = False) {and (Link[j]=0)} then
+          begin     { Somente são avaliadas as polylines de destino (Link = 0) }
+            k := k + 1;  SetLength(XPol,k+1);  SetLength(Id,k+1);
+
+            XPol[k] := Dist_Points(P[i].X[1],P[i].Y[1],P[i].Z[1],
+                                   MeanValueN(P[j].X),P[j].Y[1],P[j].Z[1]);
+            Id[k] := j;
+          end;
+        end;
+        XPol := QuickSortMap(k,XPol,Key);  Id := RefSort(k,Id,Key);
+
+        {strmsg := VectorToStr(XPol,char(9),fffixed,18,18);
+        ShowMessage(strmsg);
+        strmsg := VectorToStr(Id,char(9));
+        ShowMessage(strmsg);}
+
+        Link[i] := Min(Id[1],SCP.N);
+        L1[i] := 1;  LN[i] := P[Link[i]].Npoly;
+      end;
+    end;
+  end;
+  //strmsg := VectorToStr(SCP.Link,'   ');
+  //ShowMessage(strmsg);
+  //ShowMessage(IntToStr(High(SCP.Link)));
+
+  {for i := 1 to SCP.N do
+  begin
+    strmsg := 'Polyline'+char(9)+IntToStr(i)+' of '+IntToStr(SCP.N)+char(13);
+    strmsg := strmsg + 'Link['+IntToStr(i)+'] '+IntToStr(SCP.Link[i])+char(13);
+    strmsg := strmsg + 'L1['  +IntToStr(i)+'] '+IntToStr(SCP.L1[i])+char(9)
+                     + 'LN['  +IntToStr(i)+'] '+IntToStr(SCP.LN[i])+char(13);
+    strmsg := strmsg + 'N'+char(9)+'X'+char(9)+'Y'+char(9)+'Z'+char(13);
+    strmsg := strmsg + PolyToStr(SCP.P[i].Npoly,SCP.P[i].X,SCP.P[i].Y,SCP.P[i].Z,char(9),fffixed,18,18);
+    ShowMessage(strmsg);
+  end;}
+
+  { Liberação de Variáveis Auxiliares da Memória }
+  SetLength(Id_TF,0);        SetLength(XPol,0);
+  SetLength(X1,0);           SetLength(Y1,0);            SetLength(Z1,0);
+  SetLength(Id,0);           SetLength(IdS,0);           SetLength(IdS1,0);
+  SetLength(IdS2,0);         SetLength(Key,0);
+  TPoly.Reset(Poly);         TPoly.Reset(PolyW);
+  SetLength(PolSetNew.P,0);  SetLength(PolSetNext.P,0);  SetLength(PolSetS.P,0);
+  SetLength(PolSetW1.P,0);   SetLength(PolSetW2.P,0);    SetLength(PolSetW.P,0);
+
+  { ATENÇÃO! Preparar código de cálculo de SCP.L1 e SCP.LN, deletando poligonais com todos os seus pontos coincidentes com outras }
+
+  SCP.Sym := False;
+  { Determina SCP.L1 e SCP.LN de cada Polyline }
+  { Passar esse procedimento para Subrotinas de cada i e uma faixa de j }
+  with SCP do
+  begin
+    If N > 1 then
+    begin
+      SetLength(SCP.L1,SCP.N+1);  SetLength(SCP.LN,SCP.N+1);
+      I_TF := False; i := 1;  j := 1;
+      repeat
+      begin
+        Inc(j);
+        I_TF := TSCPClass.CoincidentPoly(i,j,SCP);
+      end;
+      until((j >= N) or (I_TF = True));
+
+      i := 1;
+      repeat
+      begin
+        Inc(i);
+        I_TF := False;  j := 0;
+        repeat
+        begin
+          Inc(j);
+          {strmsg := 'j = '+IntToStr(j)+char(9)+'i = '+IntToStr(i)+char(13);
+          strmsg := strmsg + SCPPolyToStr(i,SCP,char(9),fffixed,18,18);
+          ShowMessage(strmsg);}
+          I_TF := TSCPClass.CoincidentPoly(i,j,SCP);
+          If I_TF = True then
+          begin
+            Dec(i);
+            {strmsg := 'COINCIDENT = TRUE'+char(9)+'j = '+IntToStr(j)+char(9)+'i = '+IntToStr(i)+char(13);
+            strmsg := strmsg + SCPPolyToStr(i,SCP,char(9),fffixed,18,18);
+            ShowMessage(strmsg);}
+          end;
+        end;
+        until((j = i-1) or (I_TF = True));
+
+        I_TF := False;  j := i;
+        repeat
+        begin
+          Inc(j);
+          {strmsg := 'j = '+IntToStr(j)+char(9)+'i = '+IntToStr(i)+char(13);
+          strmsg := strmsg + SCPPolyToStr(i,SCP,char(9),fffixed,18,18);
+          ShowMessage(strmsg);}
+          I_TF := TSCPClass.CoincidentPoly(i,j,SCP);
+          If I_TF = True then
+          begin
+            Dec(i);
+            {strmsg := 'COINCIDENT = TRUE'+char(9)+'j = '+IntToStr(j)+char(9)+'i = '+IntToStr(i)+char(13);
+            strmsg := strmsg + SCPPolyToStr(i,SCP,char(9),fffixed,18,18);
+            ShowMessage(strmsg);}
+          end;
+        end;
+        until((j = N) or (I_TF = True));
+      end;
+      until(i = N-1);
+
+      I_TF := False;  i := N;
+      j := 1;
+      repeat
+      begin
+        Inc(j);
+        I_TF := TSCPClass.CoincidentPoly(i,j,SCP);
+      end;
+      until((j = N-1) or (I_TF = True));
+    end;
+  end;
+
+  SCP.Sym := True;
+
+  for i := 1 to SCP.N do
+  begin
+    SetLength(SCP.P[i].Merged,SCP.P[i].Npoly+1);
+    for j := 1 to SCP.P[i].Npoly do
+      SCP.P[i].Merged[j] := True;
+  end;
+
+  assignfile(TextBug,'Link List.txt');
+  rewrite(TextBug);
+  for i := 1 to SCP.N do
+  begin
+    writeln(TextBug,IntToStr(i)+#9+'Link = '+IntToStr(SCP.Link[i])+
+    #9+'L1 '+IntToStr(SCP.L1[i])+#9+'LN '+IntToStr(SCP.LN[i]));
+    //ShowMessage(SCPPolyToStr(i,SCP,char(9),fffixed,18,18));
+  end;
+  closefile(TextBug);
+
+end;  { TSCPClass.TBCToSCP }
+
+class function TSCPClass.UniformSCP(SCP : TSCP) : TSCP;
+var
+  i, j, k : integer;
+  Ni, Nj : integer;
+begin
+  Result := SCP;
+  with Result do
+  begin
+    for i := 1 to N do
+    begin
+      If Link[i] <> 0 then
+      begin
+        j := Link[i];
+        Ni := Max(L1[i],LN[i])-Min(L1[i],LN[i])+1;
+        Nj := Max(L1[j],LN[j])-Min(L1[j],LN[j])+1;
+        If Ni > Nj then
+        begin
+          P[j] := TPoly.IncreasePoints(Ni-Nj,L1[j],LN[j],P[j]);
+          If L1[j]<LN[j] then
+            LN[j] := L1[j] + Ni-Nj
+          Else If L1[j]>LN[j] then
+            L1[j] := LN[j] + Ni-Nj;
+        end
+        Else If Ni < Nj then
+        begin
+          P[i] := TPoly.IncreasePoints(Nj-Ni,L1[i],LN[i],P[i]);
+          If L1[i]<LN[i] then
+            LN[i] := L1[i] + Nj-Ni
+          Else If L1[i]>LN[i] then
+            L1[i] := LN[i] + Nj-Ni;
+        end;
+      end;
+    end;
+  end;
+end;  { TSCPClass.UniformSCP }
+
+{---------------------------------------------------------------------------------------------------}
+{                                           TECPClass                                               }
+{                                                                                                   }
+{ TECPClass class gather all algorithms related to the construction of the linesplan of ECP file    }
+{---------------------------------------------------------------------------------------------------}
+
+class procedure TECPClass.Desenha_Polyline(Poly : TPline; Image : TImage; Color : TColor;
+                                           SizeRatio : TFloatType; XOrigin, YOrigin : integer);
+var
+  i : integer;
+  X, Y : integer;
+begin
+  Image.Canvas.Pen.Color := Color;
+  for i := 1 to Poly.Npoly-1 do
+  begin
+    with Image do
+    begin
+      X := Round(SizeRatio*Poly.X[i]);
+      Y := Round(SizeRatio*Poly.Y[i]);
+      Canvas.MoveTo(X+XOrigin,Image.Height-(Y+YOrigin));
+      X := Round(SizeRatio*Poly.X[i+1]);
+      Y := Round(SizeRatio*Poly.Y[i+1]);
+      Canvas.LineTo(X+XOrigin,Image.Height-(Y+YOrigin));
+    end;
+  end;
+end;  { TECPClass.Desenha_Polyline }
+
+class procedure TECPClass.Draw_Grid(Image : TImage; Mode_Aligned : boolean; ShowText : boolean; Hmargem, Vmargem : TFloatType;
+                                    HMF, VMF : TVetorN; nHMF, nVMF : integer;
+                                    Ratio, xMin, Lt, Bt, Ht, T : TFloatType;
+                                    NX,NY,NZ : integer; Xgrid, Ygrid, Zgrid : TVetorN);
+var
+  i, j : integer;
+  Ref_X, Ref_Y : TFloatType;
+  Xo_C, Yo_C, Xgr, Ygr : TFloatType;
+  XImg, YImg : integer;
+  TextFont : integer;
+begin
+  { Dimensiona Arrays das Margens }
+  SetLength(HMF,nHMF+1);  SetLength(VMF,nVMF+1);
+
+  If Mode_Aligned = True then                { ALINHADA }
+  Begin
+    { Grade - Vista Frontal }
+    Ref_X := HMF[1]+HMF[2];  Ref_Y := VMF[2]+VMF[3];
+    { Referência na Extremidade Inferior Esquerda da Grade }
+    Xo_C := (Ref_X*Hmargem)+(Ratio*Lt);
+    Yo_C := (Ref_Y*Vmargem)+(Ratio*Bt);   { Em relação a base da tela }
+    { Título - Plano de Balizas }
+    XImg := Round(Xo_C+(Ratio*Bt/2));  YImg := Round((1/2)*VMF[1]*Vmargem);
+    TextFont := Round(Ratio*Ht/5.5);
+    ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'Plano de Balizas');
+
+    Image.Canvas.Pen.Color := clBlack;
+    for i := 1 to NZ do             { Linhas d'Água }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*2*Ygrid[NY];
+        Ygr := Ratio*Zgrid[i];
+        YImg := Image.Height-Round(Ygr+Yo_C);
+        MoveTo(Round(Xo_C),YImg);
+        LineTo(Round(Xo_C+Xgr),YImg);
+      end;
+    end;
+
+    If ShowText = True then     { Legenda de Linhas d'Água }
+    begin
+      { Linha de Base - LB }
+      XImg := Round(Xo_C-(HMF[2]*Hmargem/2));  YImg := Image.Height-Round(Yo_C);
+      TextFont := Round(Ratio*Ht/7);
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LB');
+      { Calado - T/2 }
+      YImg := Image.Height-Round(Yo_C+(Ratio*T/2));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T/2');
+      { Calado - LAP }
+      YImg := Image.Height-Round(Yo_C+(Ratio*T));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LAP');
+      XImg := Round(((HMF[1]*Hmargem)-(Ratio*xMin))/2);
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T');
+      XImg := Image.Width-Round(HMF[3]*Hmargem/2);
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T');
+      { Calado - D }
+      XImg := Round(Xo_C-(HMF[2]*Hmargem/2));  YImg := Image.Height-Round(Yo_C+(Ratio*Zgrid[NZ]));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'D');
+    end;
+
+
+    for i := 1 to NY do             { Planos do Alto }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*((Bt/2)+Ygrid[i]);
+        Ygr := Ratio*Zgrid[NZ];
+        MoveTo(Round(Xo_C+Xgr),Image.Height-Round(Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    If ShowText = True then    { Legenda de Planos do Alto }
+    begin
+      for i := 1 to NY do
+      begin
+        If YGrid[i] < 0 then
+        begin
+          { ..., III, II, I - Grade Frontal }
+          XImg := Round(Xo_C+(Ratio*Bt/2)+(Ratio*YGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman((NY div 2)-i+1));
+        end
+        Else If YGrid[i] = 0 then
+        begin
+          { LC - Grade Frontal }
+          XImg := Round(Xo_C+(Ratio*Bt/2));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LC');
+
+          { LC - Grade Superior (lado esquerdo) }
+          XImg := Round(((HMF[1]*Hmargem)-(Ratio*xMin))/2);  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*Bt/2));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LC');
+          { LC - Grade Superior (lado direito) }
+          XImg := Round(Xo_C-(HMF[2]*Hmargem)+(((HMF[1]*Hmargem)-(Ratio*xMin))/2));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LC');
+        end
+        Else If YGrid[i] > 0 then
+        begin
+          { I, II, III, ... - Grade Frontal }
+          XImg := Round(Xo_C+(Ratio*Bt/2)+(Ratio*YGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman(i-(NY div 2 +1)));
+          { I, II, III, ... - Grade Superior (lado esquerdo) }
+          XImg := Round(((HMF[1]*Hmargem)-(Ratio*xMin))/2);
+          YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*((Bt/2)-YGrid[i])));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman(i-(NY div 2 +1)));
+          { I, II, III, ... - Grade Superior (lado direito) }
+          XImg := Round(Xo_C-(HMF[2]*Hmargem)+(((HMF[1]*Hmargem)-(Ratio*xMin))/2));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman(i-(NY div 2 +1)));
+        end;
+      end;
+    end;
+
+    { Grade - Vista de Perfil }
+    Ref_X := HMF[1];  Ref_Y := VMF[2]+VMF[3];
+    { Referência na Extremidade Inferior Esquerda da Grade }
+    Xo_C := (Ref_X*Hmargem)-(Ratio*xMin);
+    Yo_C := (Ref_Y*Vmargem)+(Ratio*Bt);   { Em relação a base da tela }
+    { Título - Plano de Linhas do Alto }
+    XImg := Round(Xo_C+(Ratio*Lt/2));  YImg := Round((1/2)*VMF[1]*Vmargem);
+    TextFont := Round(Ratio*Ht/5.5);
+    ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'Plano de Linhas do Alto');
+
+    Image.Canvas.Pen.Color := clBlack;
+    for i := 1 to NZ do             { Linhas d'Água }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[NX];
+        Ygr := Ratio*Zgrid[i];
+        MoveTo(Round(Xo_C),Image.Height-Round(Ygr+Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    for i := 1 to NX do             { Balizas }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[i];
+        Ygr := Ratio*Zgrid[NZ];
+        MoveTo(Round(Xo_C+Xgr),Image.Height-Round(Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    If ShowText = True then     { Legenda de Balizas }
+    begin
+      { PR - Grade Perfil }
+      XImg := Round(Xo_C+(Ratio*XGrid[1]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+      TextFont := Round(Ratio*Ht/7);
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PR');
+      { PR - Grade Superior }
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(5/4))-(Ratio*Bt/2));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PR');
+      { PV - Grade Perfil }
+      XImg := Round(Xo_C+(Ratio*XGrid[NX]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PV');
+      { PV - Grade Superior }
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(5/4))-(Ratio*Bt/2));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PV');
+
+      for i := 2 to NX-1 do
+      begin
+        If XGrid[i] = XGrid[NX]/2 then
+        begin
+          { SMN - Grade Perfil }
+          XImg := Round(Xo_C+(Ratio*XGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'SMN');
+          { SMN - Grade Superior }
+          YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(5/4))-(Ratio*Bt/2));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'SMN');
+        end
+        Else If (XGrid[i] <> XGrid[NX]/2) then
+        begin
+          { 1, 2, 3, ... - Grade Perfil }
+          XImg := Round(Xo_C+(Ratio*XGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntToStr(i));
+          { 1, 2, 3, ... - Grade Superior }
+          YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(5/4))-(Ratio*Bt/2));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntToStr(i));
+        end;
+      end;
+    end;
+
+    { Grade - Vista Superior }
+    Ref_X := HMF[1];  Ref_Y := VMF[3];
+    { Referência na Extremidade Esquerda da Grade, na altura da Linha de Centro }
+    Xo_C := (Ref_X*Hmargem)-(Ratio*xMin);
+    Yo_C := (Ref_Y*Vmargem)+(Ratio*Bt/2);     { Em relação a base da tela }
+    { Título - Plano de Linhas d'Água }
+    XImg := Round(Xo_C+(Ratio*Lt/2));  YImg := Round((VMF[1]*Vmargem)+(Ratio*Ht)+((3/4)*VMF[2]*Vmargem));
+    TextFont := Round(Ratio*Ht/5.5);
+    ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'Plano de Linhas d'+char(39)+'Água');
+
+    Image.Canvas.Pen.Color := clBlack;
+    for i := (NY div 2)+1 to NY do  { Planos de Alto }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[NX];
+        Ygr := Ratio*Ygrid[i];
+        MoveTo(Round(Xo_C),Image.Height-Round(Ygr+Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    for i := 1 to NX do             { Balizas }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[i];
+        Ygr := Ratio*Ygrid[NY];
+        MoveTo(Round(Xo_C+Xgr),Image.Height-Round(Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+  End
+  Else If Mode_Aligned = False then          { VERTICAL }
+  Begin
+    { Grade - Vista Frontal }
+    Ref_X := 0;  Ref_Y := VMF[2]+VMF[3]+VMF[4];
+    { Referência na Extremidade Inferior Esquerda da Grade }
+    Xo_C := (Image.Width/2)-(Ratio*Bt/2);
+    Yo_C := (Ref_Y*Vmargem)+(Ratio*(Bt+Ht));       { Em relação a base da tela }
+    { Título - Plano de Balizas }
+    XImg := Round(Image.Width/2);  YImg := Round((1/2)*VMF[1]*Vmargem);
+    TextFont := Round(Ratio*Ht/5.5);
+    ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'Plano de Balizas');
+
+    Image.Canvas.Pen.Color := clBlack;
+    for i := 1 to NZ do             { Linhas d'Água }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*2*Ygrid[NY];
+        Ygr := Ratio*Zgrid[i];
+        MoveTo(Round(Xo_C),Image.Height-Round(Ygr+Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    If ShowText = True then     { Legenda de Linhas d'Água }
+    begin
+      { Grade Frontal }
+      { Linha de Base - LB - lado esquerdo }
+      XImg := Round(Xo_C-(Ratio*Bt/6));  YImg := Image.Height-Round(Yo_C);
+      TextFont := Round(Ratio*Ht/7);
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LB');
+      { Calado - T/2 - lado esquerdo }
+      YImg := Image.Height-Round(Yo_C+(Ratio*T/2));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T/2');
+      { Calado - LAP - lado esquerdo }
+      YImg := Image.Height-Round(Yo_C+(Ratio*T));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LAP');
+      { Pontal - D - lado esquerdo }
+      YImg := Image.Height-Round(Yo_C+(Ratio*ZGrid[NZ]));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'D');
+      { Calado - T/4 - lado direito }
+      XImg := Round(Xo_C+(Ratio*Bt*7/6));  YImg := Image.Height-Round(Yo_C+(Ratio*T/4));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T/4');
+      { Calado - T - lado direito }
+      YImg := Image.Height-Round(Yo_C+(Ratio*T));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T');
+
+      { Grade Perfil }
+      { Calado - T/4 - lado esquerdo }
+      XImg := Round((HMF[1]*Hmargem)-(Ratio*xMin)-(Ratio*Bt/6));
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*Ht)+(Ratio*T/4));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T/4');
+      { Calado - T - lado esquerdo }
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*Ht)+(Ratio*T));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T');
+      { Linha de Base - LB - lado direito }
+      XImg := Image.Width-Round((HMF[2]*Hmargem)-(Ratio*Bt/6));
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*Ht));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LB');
+      { Calado - T/2 - lado direito }
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*Ht)+(Ratio*T/2));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'T/2');
+      { Calado - LAP - lado direito }
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*Ht)+(Ratio*T));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LAP');
+      { Pontal - D - lado direito }
+      YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem)-(Ratio*Ht)+(Ratio*ZGrid[NZ]));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'D');
+    end;
+
+    for i := 1 to NY do             { Planos do Alto }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*((Bt/2)+Ygrid[i]);
+        Ygr := Ratio*Zgrid[NZ];
+        MoveTo(Round(Xo_C+Xgr),Image.Height-Round(Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    If ShowText = True then    { Legenda de Planos do Alto }
+    begin
+      for i := 1 to NY do
+      begin
+        If YGrid[i] < 0 then
+        begin
+          { ..., III, II, I - Grade Frontal }
+          XImg := Round(Xo_C+(Ratio*Bt/2)+(Ratio*YGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman((NY div 2)-i+1));
+        end
+        Else If YGrid[i] = 0 then
+        begin
+          { LC - Grade Frontal }
+          XImg := Round(Xo_C+(Ratio*Bt/2));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LC');
+
+          { LC - Grade Superior (lado esquerdo) }
+          XImg := Round((HMF[1]*Hmargem)-(Ratio*xMin)-(Ratio*Bt/6));
+          YImg := Image.Height-Round((VMF[4]*Vmargem)+(Ratio*Bt/2));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LC');
+          { LC - Grade Superior (lado direito) }
+          XImg := Image.Width-Round((HMF[2]*Hmargem)-(Ratio*Bt/6));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'LC');
+        end
+        Else If YGrid[i] > 0 then
+        begin
+          { I, II, III, ... - Grade Frontal }
+          XImg := Round(Xo_C+(Ratio*Bt/2)+(Ratio*YGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[2]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman(i-(NY div 2 +1)));
+          { I, II, III, ... - Grade Superior (lado esquerdo) }
+          XImg := Round((HMF[1]*Hmargem)-(Ratio*xMin)-(Ratio*Bt/6));
+          YImg := Image.Height-Round((VMF[4]*Vmargem)+(Ratio*((Bt/2)+YGrid[i])));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman(i-(NY div 2 +1)));
+          { I, II, III, ... - Grade Superior (lado direito) }
+          XImg := Image.Width-Round((HMF[2]*Hmargem)-(Ratio*Bt/6));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntegerToRoman(i-(NY div 2 +1)));
+        end;
+      end;
+    end;
+
+    { Grade - Vista de Perfil }
+    Ref_X := HMF[1];  Ref_Y := VMF[3]+VMF[4];
+    { Referência na Extremidade Inferior Esquerda da Grade }
+    Xo_C := (Ref_X*Hmargem)-(Ratio*xMin);
+    Yo_C := (Ref_Y*Vmargem)+(Ratio*Bt);   { Em relação a base da tela }
+    { Título - Plano de Linhas do Alto }
+    XImg := Round(Xo_C+(Ratio*Lt/2));  YImg := Round((VMF[1]*Vmargem)+(Ratio*Ht)+((3/4)*VMF[2]*Vmargem));
+    TextFont := Round(Ratio*Ht/5.5);
+    ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'Plano de Linhas do Alto');
+
+    Image.Canvas.Pen.Color := clBlack;
+    for i := 1 to NZ do             { Linhas d'Água }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[NX];
+        Ygr := Ratio*Zgrid[i];
+        MoveTo(Round(Xo_C),Image.Height-Round(Ygr+Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    for i := 1 to NX do             { Balizas }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[i];
+        Ygr := Ratio*Zgrid[NZ];
+        MoveTo(Round(Xo_C+Xgr),Image.Height-Round(Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    { Grade - Vista Superior }
+    Ref_X := HMF[1];  Ref_Y := VMF[4];
+    { Referência na Extremidade Esquerda da Grade, na altura da Linha de Centro }
+    Xo_C := (Ref_X*Hmargem)-(Ratio*xMin);
+    Yo_C := (Ref_Y*Vmargem)+(Ratio*Bt/2);     { Em relação a base da tela }
+    { Título - Plano de Linhas d'Água }
+    XImg := Round(Xo_C+(Ratio*Lt/2));  YImg := Round(((VMF[1]+VMF[2])*Vmargem)+(Ratio*2*Ht)+((3/4)*VMF[3]*Vmargem));
+    TextFont := Round(Ratio*Ht/5.5);
+    ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'Plano de Linhas d'+char(39)+'Água');
+
+    Image.Canvas.Pen.Color := clBlack;
+    for i := (NY div 2)+1 to NY do  { Planos de Alto }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[NX];
+        Ygr := Ratio*Ygrid[i];
+        MoveTo(Round(Xo_C),Image.Height-Round(Ygr+Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    for i := 1 to NX do             { Balizas }
+    begin
+      with Image.Canvas do
+      begin
+        Xgr := Ratio*Xgrid[i];
+        Ygr := Ratio*Ygrid[NY];
+        MoveTo(Round(Xo_C+Xgr),Image.Height-Round(Yo_C));
+        LineTo(Round(Xo_C+Xgr),Image.Height-Round(Ygr+Yo_C));
+      end;
+    end;
+
+    If ShowText = True then     { Legenda de Balizas }
+    begin
+      Yo_C := ((VMF[3]+VMF[4])*Vmargem) + (Ratio*Bt);
+      { PR - Grade Perfil }
+      XImg := Round(Xo_C+(Ratio*XGrid[1]));  YImg := Image.Height-Round(Yo_C-(VMF[3]*Vmargem*(1/4)));
+      TextFont := Round(Ratio*Ht/7);
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PR');
+      { PR - Grade Superior }
+      YImg := Image.Height-Round((VMF[4]*Vmargem)+(Ratio*Bt/2)-(VMF[3]*Vmargem*(1/4)));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PR');
+      { PV - Grade Perfil }
+      XImg := Round(Xo_C+(Ratio*XGrid[NX]));  YImg := Image.Height-Round(Yo_C-(VMF[3]*Vmargem*(1/4)));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PV');
+      { PV - Grade Superior }
+      YImg := Image.Height-Round((VMF[4]*Vmargem)+(Ratio*Bt/2)-(VMF[3]*Vmargem*(1/4)));
+      ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'PV');
+
+      for i := 2 to NX-1 do
+      begin
+        If XGrid[i] = XGrid[NX]/2 then
+        begin
+          { SMN - Grade Perfil }
+          XImg := Round(Xo_C+(Ratio*XGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[3]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'SMN');
+          { SMN - Grade Superior }
+          YImg := Image.Height-Round((VMF[4]*Vmargem)+(Ratio*Bt/2)-(VMF[3]*Vmargem*(1/4)));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],'SMN');
+        end
+        Else If (XGrid[i] <> XGrid[NX]/2) then
+        begin
+          { 1, 2, 3, ... - Grade Perfil }
+          XImg := Round(Xo_C+(Ratio*XGrid[i]));  YImg := Image.Height-Round(Yo_C-(VMF[3]*Vmargem*(1/4)));
+          TextFont := Round(Ratio*Ht/7);
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntToStr(i));
+          { 1, 2, 3, ... - Grade Superior }
+          YImg := Image.Height-Round((VMF[4]*Vmargem)+(Ratio*Bt/2)-(VMF[3]*Vmargem*(1/4)));
+          ImageText(Image,XImg,YImg,True,True,TextFont,clblack,[fsbold],IntToStr(i));
+        end;
+      end;
+    end;
+  End;
+
+end;  { TECPClass.Draw_Grid }
+
+class procedure TECPClass.Escala_Contornos(Image : TImage; Mode_Aligned : boolean; Lt, Bt, Ht : TFloatType; margemA3, nHA3, nVA3 : TFloatType;
+                                            var Hmargem, Vmargem, Ratio : TFloatType);
+var
+  RatioX, RatioY : TFloatType;
+begin
+  If Mode_Aligned = True then        { Disposição Alinhada de Vistas }
+  begin
+    Hmargem := (margemA3/418)*Image.Width;
+    Vmargem := (margemA3/295)*Image.Height;
+
+    { X: (1.6 - 4.6 - 1.6)*margemA3 - Margens da Esquerda a Direita }
+    { Y: (3.8 - 5.0 - 2.4)*margemA3 - Margens de Cima para Baixo }
+    RatioX := (Image.Width-(nHA3*Hmargem))/(Lt+Bt);      { 1.6+1.6+4.6 = 7.8 }
+    RatioY := (Image.Height-(nVA3*Vmargem))/(Ht+Bt);    { 3.8+5+2.4 = 11.2 }
+    Ratio := Min(RatioX,RatioY);
+
+    If RatioX < RatioY then
+      Vmargem := (Image.Height-(Ratio*(Ht+Bt)))/nVA3
+    Else If RatioX > RatioY then
+      Hmargem := (Image.Width-(Ratio*(Lt+Bt)))/nHA3;
+  end
+  Else If Mode_Aligned = False then  { Disposição Vertical de Vistas }
+  begin
+    Hmargem := (margemA3/418)*Image.Width;
+    Vmargem := (margemA3/295)*Image.Height;
+
+    { X: (2.6 - 2.6)*margemA3 - Margens da Esquerda a Direita  }
+    { Y: (2.2 - 3.4 - 3.4 - 1.6)*margemA3 - Margens da Esquerda a Direita }
+    RatioX := (Image.Width-(nHA3*Hmargem))/Max(Lt,Bt);    { 2.6+2.6 = 5.2 }
+    RatioY := (Image.Height-(nVA3*Vmargem))/(Ht+Ht+Bt);  { 2.2+3.4+3.4+1.6 = 10.6 }
+    Ratio := Min(RatioX,RatioY);
+    If RatioX < RatioY then
+      Vmargem := (Image.Height-(Ratio*(Ht+Ht+Bt)))/nVA3
+    Else If RatioX > RatioY then
+      Hmargem := (Image.Width-(Ratio*Max(Lt,Bt)))/nHA3;
+  end;
+end;  { TECPClass.Escala_Contornos }
+
+class procedure TECPClass.Fit_Section_Grid(Lt, Ht, LAP, Lgrid, Bgrid, Hgrid : TFloatType; var NX,NY,NZ : integer;
+                                            var Xgrid, Ygrid, Zgrid : TVetorN);
+var                 { Lt: LOA       Ht: Zmax       LAP: T }
+  i, j : integer;   { Lgrid: LPP    Bgrid: Beam    Hgrid: Depth }
+begin
+  {If Lt <= 35 then}
+  begin
+    { POSIÇÃO - BALIZAS }
+    NX := 11;
+    SetLength(Xgrid,NX+1);
+                          { PR/0 ½  1 1½ 2 }
+    for i := 1 to 5 do    {  1   2  3 4  5 }
+      Xgrid[i] := (i-1)*Lgrid/(NX-1);
+    Xgrid[6] := Lgrid/2;  { SM }
+                          { 3  3½  4  41½ PV/5 }
+    for i := 7 to 11 do   { 7  8   9  10   11  }
+      Xgrid[i] := (i-1)*Lgrid/(NX-1);
+
+    { POSIÇÃO - LINHAS DO ALTO }
+    NY := 7;
+    SetLength(Ygrid,NY+1);
+                          { I II III }
+    for i := 1 to 3 do    { 1 2   3  }
+      Ygrid[i] := -(4-i)*Bgrid/(NY-1);
+    Ygrid[4] := 0;         { LC }
+                          { I  II III }
+    for i := 1 to 3 do    { 5  6   7  }
+      Ygrid[i+4] := i*Bgrid/(NY-1);
+
+    { POSIÇÃO - LINHAS D'ÁGUA }
+    NZ := 7;
+    SetLength(Zgrid,NZ+1);
+                          { LB T/4 T/2 3T/4 T }
+    for i := 1 to 5 do    { 1   2   3   4   5 }
+      Zgrid[i] := (i-1)*LAP/(5-1);
+
+
+    Zgrid[6] := (LAP+Hgrid)/2;   { (T+D)/2 }
+    Zgrid[7] := Hgrid;           {    D    }
+
+    (*If Ht > Hgrid then
+    begin
+      NZ := 8;
+      SetLength(Zgrid,NZ+1);
+      Zgrid[8] := (Ht+Hgrid)/2;  { (D+Ht)/2 }
+    end;*)
+
+  end;
+end;  { TECPClass.Fit_Section_Grid }
+
+class procedure TECPClass.Generate_Linesplan_Rounded(Pol_F, Pol_S, Pol_L : TPline;
+                                                     Pol_EP, Pol_BF : T3DPline; LBP : TFloatType;
+                                                     NX, NY,NZ : integer; XGrid, YGrid, ZGrid : TVetorN;
+                                                     var ST, WL, BT : TWire);
+var
+  i, j, k : integer;
+  V_X, V_X1, V_X3, V_X4, V_X5 : TVetorN;
+  V_Y1, V_Y2, V_Y4, V_Y5 : TVetorN;
+  V_WX, V_WX1, V_WX3, V_WX4, V_WX5 : TVetorBN;
+  V_WY1, V_WY2, V_WY4, V_WY5 : TVetorBN;
+  ST_pol, WL_pol, BT_pol : TWire;
+  P_Aux, P_Aux1, P_Aux2, P_Aux3 : TPline;
+  Pol_LC, Pol_L1, Pol_L2 : T3DPline;
+  aux_TF, aux2_TF : boolean;
+  varaux, varaux2 : TFloatType;
+  dist1, dist2 : TFloatType;
+  PlanScan : TPlan;
+  hit, hit1, hit2 : boolean;
+  Pts, Pts1, Pts2 : TSetofPoints3D;
+  PX,PY,PZ,PX1,PY1,PZ1 : TFloatType;
+  Pol_F3D, Pol_S3D : T3DPline;
+  P_Copy, P1_Copy : T3DPline;
+  ZMax_PolF, ZMin_PolF : TFloatType;
+  debug_str : string;
+begin
+  { WATERLINES - LINHAS D'ÁGUA }
+
+  { Perfil Completo - Lateral + Borda Falsa + Espelho de Popa }
+  If Pol_EP.Npoly = 0 then         { Sem EP }
+  begin
+    with TPoly do
+    begin
+      { Alinha Pol_BF com Pol_L }{ Ou seja: Reverte Pol_BF para aproximar seu primeiro ponto do último de Pol_L }
+      Pol_L1 := Align_R(Pline_2Dto3D(Pol_L,0,'XZ'),Pol_BF);
+      { Une Pol_L1 com Pol_L e Fecha a Polyline Resultante }
+      Pol_LC := Close(Join(Pline_2Dto3D(Pol_L,0,'XZ'),Pol_L1));
+    end;
+  end
+  Else If Pol_EP.Npoly <> 0 then   { Com EP }
+  begin
+    with TPoly do
+    begin
+      { Alinha Pol_BF com Pol_L }
+      Pol_L1 := Align_R(Pline_2Dto3D(Pol_L,0,'XZ'),Pol_BF);
+      { Une Pol_L com Pol_L1 }
+      Pol_L2 := Join(Pline_2Dto3D(Pol_L,0,'XZ'),Pol_L1);
+      { Alinha Pol_EP com Pol_L2 }
+      Pol_L1 := Align_R(Pol_L2,Pol_EP);
+      { Une Pol_L1 com Pol_L2 e Fecha a Polyline Resultante }
+      Pol_LC :=  Close(Join(Pol_L2,Pol_L1));
+    end;
+  end;
+
+  { Transforma Pol_F em Poligonal 3D - Facilita os cálculos }
+  Pol_F3D := TPoly.Pline_2DTo3D(Pol_F,LBP/2,'YZ');
+
+  { Transforma Pol_S em Poligonal 3D - Facilita os cálculos }
+  Pol_S3D := TPoly.Pline_2DTo3D(Pol_S,ZGrid[NZ],'XY');
+
+  WL_pol.N := NZ;
+  SetLength(WL_pol.P,NZ+1);
+  for i := 1 to NZ do    { Define a altura dos 3 primeiros pontos de cada LA }
+  begin
+    WL_pol.P[i].NPoly := 3;
+    SetLength(WL_pol.P[i].X,4);  SetLength(WL_pol.P[i].Y,4);
+    SetLength(WL_pol.P[i].Z,4);
+    for j := 1 to 3 do
+      WL_pol.P[i].Z[j] := ZGrid[i];
+  end;
+
+  { Alturas Máxima e Mínima - Frontal }
+  ZMax_PolF := 0;
+  ZMin_PolF := 0;
+  for i := 1 to Pol_F3D.Npoly do
+  begin
+    If Pol_F3D.Z[i] > ZMax_PolF then
+      ZMax_PolF := Pol_F3D.Z[i];
+    If Pol_F3D.Z[i] < ZMin_PolF then
+      ZMin_PolF := Pol_F3D.Z[i];
+  end;
+
+  { DEBUG - Escreve Pol_LC em string em formato DXF }
+  WriteonDXFStr_Poly(StrDXFDebug,'LC',1,False,1,Pol_LC.Npoly,Pol_LC.Npoly,Pol_LC.X,Pol_LC.Y,Pol_LC.Z,
+                     fffixed,DXFPrecision,DXFDigits);
+
+  { DEBUG - Escreve Pol_F3D em string em formato DXF }
+  WriteonDXFStr_Poly(StrDXFDebug,'YZ',7,False,1,Pol_F3D.Npoly,Pol_F3D.Npoly,Pol_F3D.X,Pol_F3D.Y,Pol_F3D.Z,
+                     fffixed,DXFPrecision,DXFDigits);
+
+  { LINHAS D'ÁGUA - TRÊS PONTOS }
+  for i := 1 to NZ do
+  begin
+    (*TPoly.Scan_Min(Pol_LC.Npoly,Pol_LC.X,Pol_LC.Y,Pol_LC.Z,'Z',ZGrid[i],1,aux_TF,varaux,varaux2);*)
+    { Interseção da LA com Perfil Completo e Frontal - pontos 1, 2 e 3 }
+    PlanScan := Plan3D(0,0,ZGrid[i],0,0,1);
+    TPoly.Poly_Plan_Intersection(Pol_LC,PlanScan,hit,Pts);
+    If hit = True then
+    begin
+      { Ponto Inicial : ponto 1 }
+      TSetofPoints.MinXPoint(Pts,PX,PY,PZ);
+      WL_pol.P[i].X[1] := PX;  WL_pol.P[i].Y[1] := PY;
+
+      { Ponto Final : ponto 3 }
+      TSetofPoints.MaxXPoint(Pts,PX,PY,PZ);
+      WL_pol.P[i].X[3] := PX;  WL_pol.P[i].Y[3] := PY;
+    end;
+
+    { Ponto Intermediário (LPP/2) : ponto 2 }
+    TPoly.Poly_Plan_Intersection(Pol_F3D,PlanScan,hit1,Pts);
+    If hit1 = True then
+    begin   { Interseção com Perfil Frontal }
+      TSetofPoints.MaxYPoint(Pts,PX,PY,PZ);
+      WL_pol.P[i].X[2] := PX;  WL_pol.P[i].Y[2] := PY;
+    end
+    Else begin    { LA acima ou abaixo da SMN }
+      PX := (WL_pol.P[i].X[1]+WL_pol.P[i].X[3])/2;
+      WL_pol.P[i].X[2] := PX;
+      WL_pol.P[i].Y[2] := (WL_pol.P[i].Y[1]+WL_pol.P[i].Y[3])/2;
+      If ZGrid[i] > ZMax_PolF then
+      begin  { LA acima da SMN - Estimativa pelo Perfil Superior }
+        PlanScan := Plan3D(PX,0,0,1,0,0);
+        TPoly.Poly_Plan_Intersection(Pol_S3D,PlanScan,hit2,Pts);
+        If hit2 = True then
+        begin
+          TSetofPoints.MaxYPoint(Pts,PX,PY,PZ);
+          WL_pol.P[i].Y[2] := PY;
+          //WL_pol.P[i].Y[2] := (((WL_pol.P[i].Y[1]+WL_pol.P[i].Y[3])/2)+PY)/2;
+        end;
+      end;  
+    end;
+    {Else If ZGrid[i] < ZMin_PolF then
+    begin
+      WL_pol.P[i].X[2] := (WL_pol.P[i].X[1]+WL_pol.P[i].X[3])/2;
+      WL_pol.P[i].Y[2] := (WL_pol.P[i].Y[1]+WL_pol.P[i].Y[3])/2
+    end;}
+
+    (*If aux_TF = True then    { Ponto Inicial }
+    begin
+      WL_pol.P[i].X[1] := varaux;  WL_pol.P[i].Y[1] := varaux2;
+    end;
+
+    TPPline.Scan_Min(Pol_F.Npoly,Pol_F.X,Pol_F.Y,'Y',ZGrid[i],aux2_TF,varaux);
+    If aux_TF = True then    { Ponto Intermediário - LPP/2 }
+    begin
+      WL_pol.P[i].X[2] := LBP/2;  WL_pol.P[i].Y[2] := varaux;
+    end;
+
+    TPoly.Scan_Max(Pol_LC.Npoly,Pol_LC.X,Pol_LC.Y,Pol_LC.Z,'Z',ZGrid[i],1,aux_TF,varaux,varaux2);
+    If aux_TF = True then   { Ponto Final }
+    begin
+      WL_pol.P[i].X[3] := varaux;  WL_pol.P[i].Y[3] := varaux2;
+    end;
+
+    If aux2_TF = False then    { Ponto Intermediário - Média }
+    begin
+      WL_pol.P[i].X[2] := (WL_pol.P[i].X[1]+WL_pol.P[i].X[3])/2;
+      TPPline.Scan_Min(Pol_S.Npoly,Pol_S.X,Pol_S.Y,'X',WL_pol.P[i].X[2],aux_TF,varaux);
+      If aux_TF = True then
+        WL_pol.P[i].Y[2] := (((WL_pol.P[i].Y[1]+WL_pol.P[i].Y[3])/2)+varaux)/2
+      Else If aux_TF = False then WL_pol.P[i].Y[2] := (WL_pol.P[i].Y[1]+0)/2;
+    end;*)
+  end;
+
+
+  debug_str := '';
+  WL.N := NZ;
+  SetLength(WL.P, WL.N+1);
+  for i := 1 to NZ do     { LINHAS D'ÁGUA COM SPLINE }
+  begin
+    P_Aux.Npoly := 3;
+    SetLength(P_Aux.X,4);  SetLength(P_Aux.Y,4);
+    for j := 1 to 3 do
+    begin
+      P_Aux.X[j] := WL_pol.P[i].X[j];
+      P_Aux.Y[j] := WL_pol.P[i].Y[j];
+    end;
+    If ProdutoVetorial2D(WL_pol.P[i].X[2]-WL_pol.P[i].X[1],WL_pol.P[i].Y[2]-WL_pol.P[i].Y[1],
+                         WL_pol.P[i].X[3]-WL_pol.P[i].X[1],WL_pol.P[i].Y[3]-WL_pol.P[i].Y[1]) <> 0 then
+    begin
+      //
+      //debug_str := PolyToStr(P_Aux,char(9),fffixed,7,3);
+      //ShowMessage(debug_str);
+      If Greater(ZGrid[i],ZMax_PolF,RelPrecision) then
+      begin
+        P_Aux1 := CatMullRomSpline(P_Aux,1/2,1/1000,1/1000,20);
+        //P_Aux1 := CatMullRomSplineX(P_Aux,0,-2,20);
+        //P_Aux1 := Ellipse_3_Points(P_Aux.X[1],P_Aux.Y[1],P_Aux.X[3],P_Aux.Y[3],P_Aux.X[1],0,20,True,True);
+      end
+      Else If Lower(ZGrid[i],ZMin_PolF,RelPrecision) then
+      begin
+        P_Aux1 := CatMullRomSpline(P_Aux,1/2,1/1000,1/1000,20);
+        //P_Aux1 := CatMullRomSplineX(P_Aux,0,-2,20);
+        //P_Aux1 := Ellipse_3_Points(P_Aux.X[1],P_Aux.Y[1],P_Aux.X[3],P_Aux.Y[3],P_Aux.X[3],0,20,True,True);
+      end
+      Else begin
+        P_Aux2 := Ellipse_3_Points(P_Aux.X[1],P_Aux.Y[1],P_Aux.X[2],P_Aux.Y[2],P_Aux.X[2],0,20,True,True);
+        P_Aux3 := Ellipse_3_Points(P_Aux.X[2],P_Aux.Y[2],P_Aux.X[3],P_Aux.Y[3],P_Aux.X[2],0,20,True,True);
+        P_Aux1 := TPPline.Join(P_Aux2,P_Aux3);
+      end;
+
+      WL.P[i].NPoly := P_Aux1.NPoly;
+      SetLength(WL.P[i].X,P_Aux1.NPoly+1);  SetLength(WL.P[i].Y,P_Aux1.NPoly+1);
+      SetLength(WL.P[i].Z,P_Aux1.NPoly+1);
+      for j := 1 to P_Aux1.Npoly do
+      begin
+        WL.P[i].X[j] := P_Aux1.X[j];
+        WL.P[i].Y[j] := P_Aux1.Y[j];
+        WL.P[i].Z[j] := ZGrid[i];
+      end;
+    end
+    Else begin
+      WL.P[i].NPoly := 3;
+      SetLength(WL.P[i].X,4);  SetLength(WL.P[i].Y,4);
+      SetLength(WL.P[i].Z,4);
+      for j := 1 to 3 do
+      begin
+        WL.P[i].X[j] := WL_pol.P[i].X[j];
+        WL.P[i].Y[j] := WL_pol.P[i].Y[j];
+        WL.P[i].Z[j] := ZGrid[i];
+      end;
+    end;
+  end;
+
+  (*writeln(Cotas,'N',char(9),'X',char(9),'Y',char(9),'Z');
+  for i := 1 to NZ do
+  begin
+    for j := 1 to WL.P[i].NPoly do
+      writeln(Cotas,IntToStr(i),char(9),WL.P[i].X[j]:0:5,char(9),WL.P[i].Y[j]:0:5,char(9),WL.P[i].Z[j]:0:5);
+    writeln(Cotas);
+  end;*)
+
+  { STATIONS - BALIZAS }
+
+  ST.N := NX;
+  SetLength(ST.P, ST.N+1);
+  for i := 1 to NX do
+  begin
+    P_Copy.Npoly := 0;  P_Copy.Closed := False;
+    SetLength(P_Copy.X, P_Copy.Npoly+1);  SetLength(P_Copy.Y, P_Copy.Npoly+1);
+    SetLength(P_Copy.Z, P_Copy.Npoly+1);
+
+    PlanScan := Plan3D(XGrid[i],0,0,1,0,0);
+    hit := False; hit1 := False;
+    TPoly.Poly_Plan_Intersection(Pol_LC,PlanScan,hit1,Pts1);
+
+    { Ponto Inicial - Interseção XGrid com Perfil Completo }
+    If hit1 = True then
+    begin
+      P_Copy.Npoly := 1;
+      SetLength(P_Copy.X, P_Copy.Npoly+1);   SetLength(P_Copy.Y, P_Copy.Npoly+1);
+      SetLength(P_Copy.Z, P_Copy.Npoly+1);
+      TSetofPoints.MinZPoint(Pts1,PX1,PY1,PZ1);
+      P_Copy.X[1] := PX1;     P_Copy.Y[1] := PY1;     P_Copy.Z[1] := PZ1;
+    end;
+    { Pontos Intermediários - Interseção XGrid com Linhas d'Água }
+    TPoly.MultiPoly_Plan_Intersection(WL,PlanScan,hit,Pts);
+    If hit = True then
+    begin
+      P_Copy.Npoly := Pts.N+1;
+      SetLength(P_Copy.X, P_Copy.Npoly+1);   SetLength(P_Copy.Y, P_Copy.Npoly+1);
+      SetLength(P_Copy.Z, P_Copy.Npoly+1);
+      for j := 1 to Pts.N do
+      begin
+        P_Copy.X[j+1] := Pts.P[j].X;
+        P_Copy.Y[j+1] := Pts.P[j].Y;
+        P_Copy.Z[j+1] := Pts.P[j].Z;
+      end;
+    end;
+    { Ponto Final - Interseção XGrid com Perfil Completo }
+    If hit1 = True then
+    begin
+      TSetofPoints.MaxZPoint(Pts1,PX,PY,PZ);
+      If not (EqualPoints(PX,PY,PZ,PX1,PY1,PZ1)) then
+      begin
+        If FindValue(P_Copy.Npoly,P_Copy.Z,PZ) = 0 then
+        begin
+          P_Copy.Npoly := P_Copy.Npoly+1;
+          SetLength(P_Copy.X, P_Copy.Npoly+1);   SetLength(P_Copy.Y, P_Copy.Npoly+1);
+          SetLength(P_Copy.Z, P_Copy.Npoly+1);
+          P_Copy.X[P_Copy.Npoly] := PX;
+          P_Copy.Y[P_Copy.Npoly] := PY;
+          P_Copy.Z[P_Copy.Npoly] := PZ;
+        end;
+      end;
+    end;
+    //ShowMessage(IntToStr(i)+char(13)+PolyToStr(P_Copy,char(9),fffixed,18,18));
+
+    { Elimina pontos repetidos da interseção }
+    TPoly.RemoveRepeatedPts(P_Copy.Npoly,P_Copy.X,P_Copy.Y,P_Copy.Z,P_Copy.Npoly,P_Copy.X,P_Copy.Y,P_Copy.Z);
+
+    //P_Copy := CatMullRomSpline3D(P_Copy,1/2,1/1000,1/1000,10);
+
+    P_Aux := TPoly.Poly_2DProjection(P_Copy,'YZ');
+
+    P_Aux1 := CatMullRomSpline(P_Aux,1/10,1/1000,1/1000,10);
+    ST.P[i] := TPoly.Pline_2Dto3D(P_Aux1,XGrid[i],'YZ');
+    
+    //ST.P[i] := P_Copy;
+    
+    (*P_Aux := TPoly.MultiPoly_Scan_Min(WL,'Z',1,'X',XGrid[i]);
+
+    { Ponto Inicial }
+    TPoly.Scan_Min(Pol_LC.Npoly,Pol_LC.X,Pol_LC.Y,Pol_LC.Z,'X',XGrid[i],2,aux_TF,varaux,varaux2);
+    If aux_TF = True then
+    begin
+      P_Aux.X[1] := varaux;  P_Aux.Y[1] := varaux2;
+    end
+    Else If aux_TF = False then
+    begin
+      P_Aux.X[1] := P_Aux.X[2];  P_Aux.Y[1] := P_Aux.Y[2];
+    end;
+
+    { Ponto Final }
+    TPoly.Scan_Max(Pol_LC.Npoly,Pol_LC.X,Pol_LC.Y,Pol_LC.Z,'X',XGrid[i],2,aux_TF,varaux,varaux2);
+    P_Aux.Npoly := P_Aux.Npoly + 1;
+    SetLength(P_Aux.X,P_Aux.Npoly+1);  SetLength(P_Aux.Y,P_Aux.Npoly+1);
+    If aux_TF = True then
+    begin
+      P_Aux.X[P_Aux.Npoly] := varaux;
+      P_Aux.Y[P_Aux.Npoly] := varaux2;
+    end
+    Else If aux_TF = False then
+    begin
+      P_Aux.X[P_Aux.Npoly] := P_Aux.X[P_Aux.Npoly-1];
+      P_Aux.Y[P_Aux.Npoly] := P_Aux.Y[P_Aux.Npoly-1];
+    end;
+
+    //P_Aux1 := CatMullRomSpline(P_Aux,1/20,1/1000,1/1000,10);
+    ST.P[i] := TPoly.Pline_2Dto3D(P_Aux,XGrid[i],'YZ');*)
+  end;
+
+  { DEBUG - Escreve ST em string em formato DXF }
+  WriteonDXFStr_SetofPoly(StrDXFDebug,'ST',1,TSetofPoly.Setof3DPlineToWire(ST.N,ST.P),
+                          fffixed,DXFPrecision,DXFDigits);
+
+
+  { PLANO DE LINHAS DO ALTO }
+
+  BT.N := NY;
+  SetLength(BT.P, BT.N+1);
+  (*P_Aux.Npoly := 0;*)
+  Pts2 := TSetofPoints.Reset(Pts2);
+  P_Copy.Npoly := 0;
+  for i := 1 to NY do
+  begin
+    If Greater(YGrid[i],0,RelPrecision) then    { Planos de Alto Fora da Linha de Centro }
+    begin
+      P_Copy.Npoly := 0;  P_Copy.Closed := False;
+      SetLength(P_Copy.X, P_Copy.Npoly+1);  SetLength(P_Copy.Y, P_Copy.Npoly+1);
+      SetLength(P_Copy.Z, P_Copy.Npoly+1);
+
+      PlanScan := Plan3D(0,YGrid[i],0,0,1,0);
+      
+      { Interseção com Linhas d'Água }
+      TPoly.MultiPoly_Plan_Intersection(WL,PlanScan,hit,Pts);
+      { Elimina pontos repetidos da interseção }
+      If hit = True then
+        TPoly.RemoveRepeatedPts(Pts.N,Pts.P,Pts.N,Pts.P);
+
+      { Interseção com Balizas }
+      TPoly.MultiPoly_Plan_Intersection(ST,PlanScan,hit1,Pts1);
+      { Elimina pontos repetidos da interseção }
+      If hit1 = True then
+        TPoly.RemoveRepeatedPts(Pts1.N,Pts1.P,Pts1.N,Pts1.P);
+
+      { Une os conjuntos de pontos das duas interseções }
+      If (hit = True) and (hit1 = True) then
+        Pts2 := TSetofPoints.Join(Pts,Pts1)
+      Else If (hit = True) and (hit1 = False) then
+        Pts2 := Pts
+      Else If (hit = False) and (hit1 = True) then
+        Pts2 := Pts1;
+
+      { Interseção com Perfil Completo }
+      TPoly.Poly_Plan_Intersection(Pol_LC,PlanScan,hit,Pts);
+      If hit = True then
+      begin
+        { Ponto Inicial }
+        TSetofPoints.MinXPoint(Pts,PX,PY,PZ);
+        Pts2 := TSetofPoints.AddPoint(Pts2,PX,PY,PZ,0);
+        { Ponto Final }
+        TSetofPoints.MaxXPoint(Pts,PX1,PY1,PZ1);
+        If not (EqualPoints(PX,PY,PZ,PX1,PY1,PZ1)) then
+          Pts2 := TSetofPoints.AddPoint(Pts2,PX1,PY1,PZ1,Pts2.N);
+      end;
+
+      If Pts2.N > 0 then
+        P_Copy := TPoly.SetofPointsToPoly(Pts2.P[1].X,Pts2.P[1].Y,Pts2.P[1].Z,
+                            Pts2.P[Pts2.N].X,Pts2.P[Pts2.N].Y,Pts2.P[Pts2.N].Z,
+                            Pts2,False);
+
+      P_Aux := TPoly.Poly_2DProjection(P_Copy,'XZ');
+
+      P_Aux1 := CatMullRomSpline(P_Aux,1/10,1/1000,1/1000,10);
+      BT.P[i] := TPoly.Pline_2Dto3D(P_Aux1,YGrid[i],'XZ');
+
+      (*{ Interseção com Linhas d'Água }
+      P_Aux := TPPline.MultiPoly_Scan_Min(WL,'Z',0,'Y',YGrid[i]);
+      { Elimina pontos repetidos da interseção }
+      TPPline.RemoveRepeatedPts(P_Aux.Npoly,P_Aux.X,P_Aux.Y,P_Aux.NPoly,P_Aux.X,P_Aux.Y);
+      { Interseção com Balizas }
+      P_Aux1 := TPPline.MultiPoly_Scan_Min(ST,'X',0,'X',YGrid[i]);
+      { Elimina pontos repetidos da interseção }
+      TPPline.RemoveRepeatedPts(P_Aux1.Npoly,P_Aux1.X,P_Aux1.Y,P_Aux1.NPoly,P_Aux1.X,P_Aux1.Y);
+
+      { Une os conjuntos de pontos das duas interseções }
+      P_Aux2 := TPPline.Join(P_Aux,P_Aux1);
+      //P_Aux2 := P_Aux1;
+      { Ponto Inicial da Interseção }
+      TPoly.Scan_Min(Pol_LC.Npoly,Pol_LC.X,Pol_LC.Y,Pol_LC.Z,'Y',YGrid[i],1,aux_TF,varaux,varaux2);
+
+      If aux_TF = True then
+        P_Aux2 := TPPline.AddPoint(P_Aux2,varaux,varaux2,0);
+
+      { Ponto Final da Interseção }
+      TPoly.Scan_Max(Pol_LC.Npoly,Pol_LC.X,Pol_LC.Y,Pol_LC.Z,'Y',YGrid[i],1,aux_TF,varaux,varaux2);
+
+      If aux_TF = True then
+        P_Aux2 := TPPline.AddPoint(P_Aux2,varaux,varaux2,P_Aux2.Npoly);
+
+      P_Aux := TPPline.PointsToPline(P_Aux2.Npoly,P_Aux2.X[1],P_Aux2.Y[1],P_Aux2.X[P_Aux2.Npoly],
+                             P_Aux2.Y[P_Aux2.Npoly],P_Aux2.X,P_Aux2.Y,False);
+
+      P_Aux1 := CatMullRomSpline(P_Aux,1/2,1/1000,1/1000,10);
+      BT.P[i] := TPoly.Pline_2Dto3D(P_Aux1,YGrid[i],'XZ');*)
+    end;
+  end;
+
+  { DEBUG - Escreve BT em string em formato DXF }
+  WriteonDXFStr_SetofPoly(StrDXFDebug,'BT',1,TSetofPoly.Setof3DPlineToWire(BT.N,BT.P),
+                          fffixed,DXFPrecision,DXFDigits);
+
+  (*writeln(Cotas,'EOF');
+  closefile(Cotas);*)
+
+end;  { TECPClass.Generate_Linesplan_Rounded }
+
+class procedure TECPClass.ImageText(Image : TImage; X, Y : integer; XCentered, YCentered : boolean;
+                                     TextFont, Color : integer; TextStyle : TFontStyles; Text : WideString);
+begin
+
+  with Image.Canvas do
+  begin
+    Font.Color := Color;
+    Font.Height := TextFont;
+    Font.Style := TextStyle;
+    If (XCentered = False) and (YCentered = False) then
+      TextOut(X,Y-TextHeight(Text),Text)
+    Else If (XCentered = True) and (YCentered = False) then
+      TextOut(Round(X-(TextWidth(Text)/2)),Y-TextHeight(Text),Text)
+    Else If (XCentered = False) and (YCentered = True) then
+      TextOut(X,Round(Y-(TextHeight(Text)/2)),Text)
+    Else If (XCentered = True) and (YCentered = True) then
+      TextOut(Round(X-(TextWidth(Text)/2)),Round(Y-(TextHeight(Text)/2)),Text);
+  end;
+end;  { TECPClass.ImageText }
+
+end.
